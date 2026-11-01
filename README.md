@@ -2,6 +2,10 @@
 
 把 Linux MonoCloud / Mihomo 和 macOS MonoProxy 的流量接入 [Neko Master](https://github.com/foru17/neko-master)，复用官方 neko-agent 完成增量计算、重试与上报。
 
+## 效果预览
+
+![MonoCloud 接入 Neko Master 后的流量统计界面](docs/images/neko-dashboard.png)
+
 ## 组件
 
 - **Linux bridge**：将现有 Mihomo Unix socket 转为带 Bearer 鉴权的本机只读 HTTP 接口。
