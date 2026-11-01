@@ -372,6 +372,73 @@ class UpgradeTests(unittest.TestCase):
         self.assertEqual((paths["target"] / "adapter.py").read_bytes(), (ROOT / "mac/adapter.py").read_bytes())
         self.assertFalse((paths["state"] / "install-state.json").exists())
 
+    def test_adopt_rollback_removes_files_it_created(self):
+        paths, old, _ = self.install()
+        (paths["target"] / "run_agent.py").unlink()
+        (paths["state"] / "install-state.json").unlink()
+        self.probe_error = ValueError("health_check_timeout")
+        with self.assertRaises(self.upgrade.UpgradeError) as caught:
+            self.upgrade_now(adopt=True)
+        self.assertEqual(caught.exception.code, "health_check_timeout")
+        self.assertFalse((paths["target"] / "run_agent.py").exists())
+        self.assertEqual((paths["target"] / "bridge.py").read_bytes(), old[paths["target"] / "bridge.py"])
+        self.assertFalse((paths["state"] / "install-state.json").exists())
+
+    def test_adopt_does_not_bypass_journal_verification(self):
+        paths, old, _ = self.install()
+        (paths["target"] / "bridge.py").write_bytes(b"locally edited")
+        with self.assertRaises(ValueError) as caught:
+            self.upgrade_now(adopt=True)
+        self.assertEqual(str(caught.exception), "existing_installation_file_conflict")
+        self.assertEqual(self.run.calls, [])
+        self.assertEqual((paths["target"] / "bridge.py").read_bytes(), b"locally edited")
+
+    def test_adopt_dry_run_reports_adoption_without_writing(self):
+        paths, old, _ = self.install()
+        (paths["state"] / "install-state.json").unlink()
+        result = self.upgrade_now(adopt=True, dry_run=True)
+        self.assertEqual(result["status"], "dry-run")
+        self.assertTrue(result["adopted"])
+        self.assertEqual((paths["target"] / "bridge.py").read_bytes(), old[paths["target"] / "bridge.py"])
+        self.assertFalse((self.home / ".local/state/monocloud-neko-upgrade").exists())
+
+    def test_mac_adopt_requires_readable_plist(self):
+        paths, old, _ = self.install("mac")
+        (paths["state"] / "install-state.json").unlink()
+        (paths["launch"] / "io.monocloud-neko.bridge.plist").write_bytes(b"not a plist")
+        with self.assertRaises(ValueError) as caught:
+            self.upgrade_now("mac", adopt=True)
+        self.assertEqual(str(caught.exception), "persistent_python_not_recoverable")
+        self.assertEqual(self.run.calls, [])
+        self.assertEqual((paths["target"] / "bridge.py").read_bytes(), old[paths["target"] / "bridge.py"])
+
+    def test_mac_adopt_new_agent_requires_backend_id(self):
+        paths, old, _ = self.install("mac")
+        for role in ("bridge", "agent"):
+            label, content = self.upgrade.mac_plist(role, paths["target"], paths["logs"], Path(sys.executable))
+            (paths["launch"] / (label + ".plist")).write_bytes(content)
+        (paths["target"] / "release.txt").write_text("Agent=agent-v1.4.8\nAssetSHA256=olddigest\n")
+        (paths["state"] / "install-state.json").unlink()
+        support = sys.modules["install_support"]
+        with patch.object(self.upgrade, "VERSION", "agent-v9.9.9"), \
+             patch.object(support, "VERSION", "agent-v9.9.9"):
+            with self.assertRaises(ValueError) as caught:
+                self.upgrade_now("mac", adopt=True)
+        self.assertEqual(str(caught.exception), "missing_recorded_backend")
+        self.assertEqual((paths["target"] / "neko-agent").read_bytes(), old[paths["target"] / "neko-agent"])
+
+    def test_adopt_requires_existing_installation_files(self):
+        paths = self.upgrade.installation(self.home, "linux")
+        paths["state"].mkdir(parents=True)
+        values = self.settings("linux")
+        paths["config"].write_text("".join(key + "=" + value + "\n" for key, value in values.items()))
+        paths["config"].chmod(0o600)
+        with self.assertRaises(ValueError) as caught:
+            self.upgrade_now(adopt=True)
+        self.assertEqual(str(caught.exception), "legacy_installation_incomplete")
+        self.assertEqual(self.run.calls, [])
+        self.assertFalse((paths["target"] / "bridge.py").exists())
+
     def test_missing_installation_journal_is_reported(self):
         paths = self.upgrade.installation(self.home, "linux")
         paths["state"].mkdir(parents=True)

@@ -49,23 +49,25 @@ python3 -B deploy/upgrade.py
 | `existing_installation_file_conflict` | 安装目录被手工改过；恢复该文件后重跑 |
 | `installation_locked` | 另一个安装/升级进程正在运行；等待后重跑 |
 | `installation_not_found` | 安装记录缺失；旧安装确认目录可信后可加 `--adopt`，否则按运维指南重新安装 |
+| `legacy_installation_incomplete` | `--adopt` 找不到现有 bridge 程序；目录不是完整安装，按运维指南重新安装 |
 | `incomplete_installation_journal` | 上次安装未完成；先用对应安装器 `--repair` 恢复，再重新升级 |
 | `gateway_token_rejected` | 本机网关令牌与配置不一致；确认 `NEKO_GATEWAY_TOKEN` 后重跑 |
 | `health_check_timeout` / `health_check_failed` | 已自动回滚；检查客户端 socket 与日志后重跑 |
-| `persistent_python_is_not_executable` | macOS 记录的 Python 已被移除；按运维指南重新安装 |
-| `agent_binary_missing` / `missing_recorded_backend` | 安装目录或安装记录不完整；按运维指南重新安装 |
+| `persistent_python_is_not_executable` | macOS 安装记录或 plist 指向的 Python 不可用；按运维指南重新安装 |
+| `persistent_python_not_recoverable` | macOS 现有 plist 缺失或无法解析；按运维指南重新安装 |
+| `agent_binary_missing` / `missing_recorded_backend` | 安装目录或安装记录不完整；按运维指南重新安装（`--adopt` 时可先确认 `release.txt` 的 `BackendID`） |
 | `unsupported_platform` | 只支持 Linux amd64 与 macOS arm64 |
 
 ## 需要手工处理的情况
 
 - **macOS 需要重建 plist 或更换 Python 路径**：脚本会报错而不是猜测；按[运维指南](operations.md#4-macos-安装与服务)重新安装并迁移配置。
 - **目标版本要求新 Agent，但下载受限**：使用 `--download-proxy`；仍不可行时按运维指南重新安装。
-- **旧安装没有 `install-state.json`**（不是当前安装器创建的）：脚本不会接管，按运维指南重新安装并迁移配置。
+- **旧安装没有 `install-state.json`**：默认拒绝升级以保证安全。确认升级的是本项目的专用目录后，可按上文加 `--adopt`（不校验已装文件），否则按运维指南重新安装。
 
 ## 关于安装器与回滚
 
 - 安装器只用于新安装和中断修复，不用于升级。手动替换文件后，`--repair` 会因校验值不匹配而拒绝继续，这是保护行为，不影响已发布程序的运行。
-- 自动回滚失败或需要手工恢复时，备份目录中的 `index.json` 记录了每个文件的原路径、备份文件名和权限，按记录覆盖回去再重启服务即可。
+- 自动回滚失败或需要手工恢复时，备份目录中的 `index.json` 记录了每个文件的原路径、备份文件名和权限；`exists` 为 `false` 表示升级前该文件不存在，手工恢复时删除它即可。
 
 ## 升级期间的数据
 

@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import platform
 import plistlib
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -93,7 +94,7 @@ def python_from_plist(paths):
         data = plistlib.loads((paths["launch"] / (LABELS["bridge"] + ".plist")).read_bytes())
         python = Path(data["ProgramArguments"][0])
     except Exception:
-        raise ValueError("persistent_python_is_not_executable") from None
+        raise ValueError("persistent_python_not_recoverable") from None
     if not python.is_file() or not os.access(python, os.X_OK):
         raise ValueError("persistent_python_is_not_executable")
     return str(python)
@@ -217,20 +218,31 @@ def create_backup(home, paths):
         folder = root / (stamp + "-" + str(suffix))
     folder.mkdir(mode=0o700)
     index = []
-    for path in paths:
-        name = str(len(index)).zfill(4)
-        mode = path.stat().st_mode & 0o777
-        (folder / name).write_bytes(path.read_bytes())
-        (folder / name).chmod(mode)
-        index.append({"path": str(path), "backup": name, "mode": mode})
-    (folder / "index.json").write_text(json.dumps(index, indent=2))
-    (folder / "index.json").chmod(0o600)
+    try:
+        for path in paths:
+            name = str(len(index)).zfill(4)
+            exists = path.exists()
+            entry = {"path": str(path), "backup": name, "exists": exists}
+            if exists:
+                entry["mode"] = path.stat().st_mode & 0o777
+                (folder / name).write_bytes(path.read_bytes())
+                (folder / name).chmod(entry["mode"])
+            index.append(entry)
+        (folder / "index.json").write_text(json.dumps(index, indent=2))
+        (folder / "index.json").chmod(0o600)
+    except BaseException:
+        shutil.rmtree(folder, ignore_errors=True)
+        raise
     return folder, index
 
 
 def restore_backup(folder, index):
     for entry in index:
-        atomic_write(Path(entry["path"]), (folder / entry["backup"]).read_bytes(), entry["mode"])
+        path = Path(entry["path"])
+        if entry.get("exists", True):
+            atomic_write(path, (folder / entry["backup"]).read_bytes(), entry.get("mode", 0o600))
+        else:
+            path.unlink(missing_ok=True)
 
 
 def checkout_version(source, run):
@@ -267,6 +279,8 @@ def upgrade(home=None, source=None, kind=None, run=subprocess.run, fetch=fetch_r
             python = (state.data.get("identity") or {}).get("python")
             records = state.data
         else:
+            if not (paths["target"] / "bridge.py").is_file():
+                raise ValueError("legacy_installation_incomplete")
             python = python_from_plist(paths) if kind == "mac" else None
             backend = installed_agent(paths["target"]).get("BackendID", "")
             records = {"backend_id": int(backend) if backend.isdigit() else None}
@@ -348,8 +362,10 @@ def main():
                              "Rerun with --adopt only for a dedicated directory you trust.") from None
         raise SystemExit("Upgrade failed (" + code + "); no files were changed") from None
     if result.get("adopted"):
-        print("warning: no installation journal; adopted this installation without verifying existing files",
-              file=sys.stderr)
+        warning = ("warning: no installation journal; adopted this installation without verifying existing files"
+                   if result["status"] != "dry-run" else
+                   "warning: no installation journal; would adopt this installation without verifying existing files")
+        print(warning, file=sys.stderr)
     if result["status"] == "up-to-date":
         print("Already up to date")
         return

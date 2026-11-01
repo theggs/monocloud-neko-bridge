@@ -168,7 +168,7 @@ Linux `/health` 是最近一次读取结果，不是持续探测。Mac默认每1
 
 Master：备份实际数据卷及部署配置，升级与数据库回滚按上游要求处理。保留时长与备份周期由部署者按容量与恢复目标配置，本仓库不强制默认策略。
 
-采集端：备份对应专用程序、私有配置及service/plist。升级在目标版本仓库中运行 `python3 -B deploy/upgrade.py`：自动检查配置必填项、备份、只替换变化的文件、按需下载并校验Agent、重启并检查 `/health`，失败时自动回滚；备份位于 `~/.local/state/monocloud-neko-upgrade/`。脚本只支持当前安装器创建的安装（存在 `install-state.json`），无法自动处理的情况按[升级指南](upgrade.md)手工替换专用目录并验证。安装脚本当前固定Agent1.4.8，不能仅改文档版本号就升级。
+采集端：备份对应专用程序、私有配置及service/plist。升级在目标版本仓库中运行 `python3 -B deploy/upgrade.py`：自动检查配置必填项、备份、只替换变化的文件、按需下载并校验Agent、重启并检查 `/health`，失败时自动回滚；备份位于 `~/.local/state/monocloud-neko-upgrade/`。脚本只处理存在 `install-state.json` 的安装；旧安装可按[升级指南](upgrade.md)用 `--adopt` 接管（不校验已装文件），或重新安装。安装脚本当前固定Agent1.4.8，不能仅改文档版本号就升级。
 
 Linux卸载前：
 
