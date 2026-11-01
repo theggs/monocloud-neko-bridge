@@ -4,9 +4,13 @@
 
 ## 未发布
 
+### 文档
+
+- 新增[升级指南](docs/upgrade.md)：备份、停服、替换专用文件、验证与回滚步骤，以及安装器、`--repair` 和 Agent 版本在升级中的限制。
+
 ### 修复
 
-- macOS 采集端启动时不再做反向 DNS 解析：`BridgeServer` 重写 `server_bind`，跳过 `HTTPServer` 对 `socket.getfqdn()` 的调用，改用绑定的回环地址作为 `server_name`；该查询是仅监听 `127.0.0.1` 时仍可能触发 macOS "本地网络"授权弹窗的一个来源（#1）。
+- macOS 采集端启动时不再做反向 DNS 解析（Linux 入口 19092 同样生效）：`BridgeServer` 重写 `server_bind`，跳过 `HTTPServer` 对 `socket.getfqdn()` 的调用，改用绑定的回环地址作为 `server_name`；该查询是仅监听 `127.0.0.1` 时仍可能触发 macOS "本地网络"授权弹窗的一个来源（#1）。
 - 实际弹窗行为仍需真机验证。Master 位于局域网时，Agent 连接 Master 本身仍可能触发该授权，不属于本修复范围。
 - 已安装的 macOS 采集端不会自动获得此修复：安装器不升级既有安装，需按[部署运维指南](docs/operations.md#7-备份升级与卸载)手动升级。手动替换后的文件与私有安装记录不再匹配，`--repair` 会拒绝继续，但不影响已发布程序的运行。
 

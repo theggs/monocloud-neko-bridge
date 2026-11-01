@@ -20,6 +20,8 @@
 
 Linux 提供 [agent.env.example](agent.env.example) 配置模板。Mac 安装器要求显式传入 Master URL，可通过受限权限文件传入管理 Bearer token，不包含任何默认私有服务器地址。
 
+已有安装的升级步骤、验证与回滚见[升级指南](docs/upgrade.md)。
+
 ## 数据范围
 
 - 包含引擎可见的域名、目标 IP（若上游提供）、客户端源 IP、代理/策略别名、规则和流量；不保留进程身份。
