@@ -113,8 +113,9 @@ def fetch_release(asset, proxy=None):
 
 class InstallState:
     """An exclusive per-user journal; only journal-owned bytes may be resumed."""
-    def __init__(self, folder, kind, repair=False, upgrade=False):
+    def __init__(self, folder, kind, repair=False, upgrade=False, adopt=False):
         self.folder, self.kind, self.repair, self.upgrade = Path(folder), kind, repair, upgrade
+        self.adopt = adopt
         self.path = self.folder / "install-state.json"
         self.data = None
         self.lock = None
@@ -141,7 +142,7 @@ class InstallState:
                     raise ValueError("incomplete_installation_journal")
                 if not self.repair and not self.upgrade:
                     raise ValueError("installation_exists_use_repair_to_resume")
-            elif self.upgrade:
+            elif self.upgrade and not self.adopt:
                 raise ValueError("installation_not_found")
             return self
         except BaseException:

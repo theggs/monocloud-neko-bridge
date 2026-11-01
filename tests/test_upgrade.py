@@ -346,6 +346,32 @@ class UpgradeTests(unittest.TestCase):
         self.assertEqual(str(caught.exception), "persistent_python_is_not_executable")
         self.assertEqual(self.run.calls, [])
 
+    def test_legacy_install_requires_adopt_and_can_be_adopted(self):
+        paths, old, _ = self.install()
+        (paths["state"] / "install-state.json").unlink()
+        with self.assertRaises(ValueError) as caught:
+            self.upgrade_now()
+        self.assertEqual(str(caught.exception), "installation_not_found")
+        result = self.upgrade_now(adopt=True)
+        self.assertEqual(result["status"], "upgraded")
+        self.assertTrue(result["adopted"])
+        self.assertEqual((paths["target"] / "bridge.py").read_bytes(), (ROOT / "linux/bridge.py").read_bytes())
+        self.assertFalse((paths["state"] / "install-state.json").exists())
+        self.assertEqual(self.upgrade_now(adopt=True)["status"], "up-to-date")
+
+    def test_legacy_mac_install_recovers_python_from_plist(self):
+        paths, old, _ = self.install("mac")
+        for role in ("bridge", "agent"):
+            label, content = self.upgrade.mac_plist(role, paths["target"], paths["logs"], Path(sys.executable))
+            (paths["launch"] / (label + ".plist")).write_bytes(content)
+        (paths["state"] / "install-state.json").unlink()
+        self.run.active = set()
+        result = self.upgrade_now("mac", adopt=True)
+        self.assertEqual(result["status"], "upgraded")
+        self.assertTrue(result["adopted"])
+        self.assertEqual((paths["target"] / "adapter.py").read_bytes(), (ROOT / "mac/adapter.py").read_bytes())
+        self.assertFalse((paths["state"] / "install-state.json").exists())
+
     def test_missing_installation_journal_is_reported(self):
         paths = self.upgrade.installation(self.home, "linux")
         paths["state"].mkdir(parents=True)

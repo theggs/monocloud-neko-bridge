@@ -4,8 +4,8 @@
 
 ## 前置条件
 
-- 已按[部署与运维指南](operations.md)安装过（私有目录中存在 `install-state.json`）。
-- Python 3.9 或以上，与当前安装使用的解释器一致（macOS 以安装记录中的路径为准）。
+- 已按[部署与运维指南](operations.md)安装过。正常升级要求私有目录中存在 `install-state.json`；旧版本安装没有该文件时见下文的 `--adopt`。
+- Python 3.9 或以上，与当前安装使用的解释器一致（macOS 以安装记录或现有 plist 中的路径为准）。
 - 目标版本的代码已检出到本仓库。
 
 ## 升级
@@ -30,6 +30,8 @@ python3 -B deploy/upgrade.py
 
 需要限制下载出口时加 `--download-proxy`，它只用于下载新 Agent。
 
+如果提示 `installation_not_found`（旧版本安装没有 `install-state.json`），且确认升级的是本项目的专用目录，可以加 `--adopt` 升级。它能完成替换、备份与重启，但无法校验已装文件是否被改动；之后建议择机按运维指南重新安装，以恢复完整保护。
+
 ## 不需要做的事
 
 - 不需要编辑 `agent.env`、令牌或 Master backend；脚本不会改写配置，也不会重新创建 backend。
@@ -46,7 +48,7 @@ python3 -B deploy/upgrade.py
 | `insecure_or_missing_private_config` | `agent.env` 缺失，或权限不是 `0600` |
 | `existing_installation_file_conflict` | 安装目录被手工改过；恢复该文件后重跑 |
 | `installation_locked` | 另一个安装/升级进程正在运行；等待后重跑 |
-| `installation_not_found` | 安装记录缺失；按运维指南重新安装 |
+| `installation_not_found` | 安装记录缺失；旧安装确认目录可信后可加 `--adopt`，否则按运维指南重新安装 |
 | `incomplete_installation_journal` | 上次安装未完成；先用对应安装器 `--repair` 恢复，再重新升级 |
 | `gateway_token_rejected` | 本机网关令牌与配置不一致；确认 `NEKO_GATEWAY_TOKEN` 后重跑 |
 | `health_check_timeout` / `health_check_failed` | 已自动回滚；检查客户端 socket 与日志后重跑 |
@@ -69,7 +71,7 @@ python3 -B deploy/upgrade.py
 
 - 重启会丢弃内存中的缓存与未上报队列，Linux 短连接也可能漏采；请在低流量时段升级。
 - Master 的历史数据、backend 和令牌不受采集端升级影响，也不需要重建 backend。
-- `release.txt` 只记录 Agent 版本与校验值；本次升级的仓库版本记录在 `install-state.json` 的 `bridge_version` 中。
+- `release.txt` 只记录 Agent 版本与校验值；本次升级的仓库版本记录在 `install-state.json` 的 `bridge_version` 中（用 `--adopt` 升级的旧安装没有安装记录，不会生成该字段）。
 
 ## 维护者：提升固定 Agent 版本
 

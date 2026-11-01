@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import platform
+import plistlib
 import subprocess
 import sys
 import tempfile
@@ -57,13 +58,13 @@ def installation(home, kind):
             "logs": home / ".local/state/monocloud-neko-bridge-mac"}
 
 
-def from_checkout(source, kind, paths, state):
+def from_checkout(source, kind, paths, python):
     if kind == "linux":
         return {paths["target"] / "bridge.py": (source / "linux/bridge.py").read_bytes(),
                 paths["target"] / "run_agent.py": (source / "linux/run_agent.py").read_bytes(),
                 paths["units"] / UNITS["bridge"]: (source / "deploy" / UNITS["bridge"]).read_bytes(),
                 paths["units"] / UNITS["agent"]: (source / "deploy" / UNITS["agent"]).read_bytes()}
-    python = Path((state.get("identity") or {}).get("python") or "")
+    python = Path(python or "")
     if not python.is_file() or not os.access(python, os.X_OK):
         raise ValueError("persistent_python_is_not_executable")
     files = {paths["target"] / name: (source / "mac" / name).read_bytes()
@@ -84,6 +85,18 @@ def installed_agent(target):
             key, _, value = line.partition("=")
             info[key] = value
     return info
+
+
+def python_from_plist(paths):
+    """Recover the persistent interpreter from an installation that has no journal."""
+    try:
+        data = plistlib.loads((paths["launch"] / (LABELS["bridge"] + ".plist")).read_bytes())
+        python = Path(data["ProgramArguments"][0])
+    except Exception:
+        raise ValueError("persistent_python_is_not_executable") from None
+    if not python.is_file() or not os.access(python, os.X_OK):
+        raise ValueError("persistent_python_is_not_executable")
+    return str(python)
 
 
 def agent_payload(kind, paths, state, fetch, run, proxy=None):
@@ -237,7 +250,7 @@ def display(path, home):
 
 
 def upgrade(home=None, source=None, kind=None, run=subprocess.run, fetch=fetch_release,
-            probe=probe_health, dry_run=False, proxy=None):
+            probe=probe_health, dry_run=False, proxy=None, adopt=False):
     home = Path(home or Path.home())
     source = Path(source or Path(__file__).resolve().parents[1])
     kind = kind or detect_kind()
@@ -248,25 +261,35 @@ def upgrade(home=None, source=None, kind=None, run=subprocess.run, fetch=fetch_r
     if missing:
         raise MissingSettings(missing)
 
-    with InstallState(paths["state"], kind, upgrade=True) as state:
-        state.verify(ignore={str(paths["config"])})
-        files = from_checkout(source, kind, paths, state.data)
-        files.update(agent_payload(kind, paths, state.data, fetch, run, proxy))
+    with InstallState(paths["state"], kind, upgrade=True, adopt=adopt) as state:
+        if state.data is not None:
+            state.verify(ignore={str(paths["config"])})
+            python = (state.data.get("identity") or {}).get("python")
+            records = state.data
+        else:
+            python = python_from_plist(paths) if kind == "mac" else None
+            backend = installed_agent(paths["target"]).get("BackendID", "")
+            records = {"backend_id": int(backend) if backend.isdigit() else None}
+        files = from_checkout(source, kind, paths, python)
+        files.update(agent_payload(kind, paths, records, fetch, run, proxy))
         changed = pending(files)
         if not changed:
-            return {"status": "up-to-date", "changes": []}
+            return {"status": "up-to-date", "changes": [], "adopted": state.data is None}
         if dry_run:
-            return {"status": "dry-run",
+            return {"status": "dry-run", "adopted": state.data is None,
                     "changes": [display(path, home) for path in changed],
                     "restart": active_services(kind, run)}
 
-        backup, index = create_backup(home, [*changed, state.path])
+        backup, index = create_backup(home, [*changed, *([state.path] if state.path.exists() else [])])
         roles = active_services(kind, run)
         health = None
         try:
             stop_services(kind, run, roles)
             for path, (content, mode) in changed.items():
-                state.replace(path, content, mode)
+                if state.data is None:
+                    atomic_write(path, content, mode)
+                else:
+                    state.replace(path, content, mode)
             if kind == "linux" and any(str(path).endswith(".service") for path in changed):
                 run(["systemctl", "--user", "daemon-reload"], check=True, capture_output=True)
             start_services(kind, run, paths, roles)
@@ -277,7 +300,7 @@ def upgrade(home=None, source=None, kind=None, run=subprocess.run, fetch=fetch_r
                 if status not in (200, 502, 503):
                     raise UpgradeError("health_check_failed")
             version = checkout_version(source, run)
-            if version:
+            if version and state.data is not None:
                 state.data["bridge_version"] = version
                 state.save()
         except Exception as error:
@@ -299,16 +322,19 @@ def upgrade(home=None, source=None, kind=None, run=subprocess.run, fetch=fetch_r
             code = error.code if isinstance(error, UpgradeError) else safe_error_code(error)
             raise UpgradeError(code, restored=str(backup)) from None
         return {"status": "upgraded", "changes": [display(path, home) for path in changed],
-                "backup": str(backup), "restarted": roles, "health": health}
+                "backup": str(backup), "restarted": roles, "health": health,
+                "adopted": state.data is None}
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dry-run", action="store_true", help="Show planned changes without touching services")
     parser.add_argument("--download-proxy", help="Optional HTTPS proxy used only to download a new Agent")
+    parser.add_argument("--adopt", action="store_true",
+                        help="Upgrade an installation that predates install-state.json; existing files are not verified")
     args = parser.parse_args()
     try:
-        result = upgrade(dry_run=args.dry_run, proxy=args.download_proxy)
+        result = upgrade(dry_run=args.dry_run, proxy=args.download_proxy, adopt=args.adopt)
     except MissingSettings as error:
         print("Cannot upgrade: private config is missing required settings: " + ", ".join(error.keys),
               file=sys.stderr)
@@ -317,7 +343,13 @@ def main():
         code = error.code if isinstance(error, UpgradeError) else safe_error_code(error)
         if isinstance(error, UpgradeError) and error.restored:
             raise SystemExit("Upgrade failed (" + code + "); previous files restored from " + error.restored) from None
+        if code == "installation_not_found":
+            raise SystemExit("Upgrade failed (installation_not_found); no installation journal was found. "
+                             "Rerun with --adopt only for a dedicated directory you trust.") from None
         raise SystemExit("Upgrade failed (" + code + "); no files were changed") from None
+    if result.get("adopted"):
+        print("warning: no installation journal; adopted this installation without verifying existing files",
+              file=sys.stderr)
     if result["status"] == "up-to-date":
         print("Already up to date")
         return
