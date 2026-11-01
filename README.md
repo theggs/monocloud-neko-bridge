@@ -52,6 +52,10 @@ python3 -B -m unittest discover -s tests -v
 
 这是一项非官方互操作项目，与 MonoCloud、MonoProxy、Chute 或 Neko 上游没有隶属关系。上游 Agent 由安装脚本从官方发布下载，不包含在仓库中。
 
+## 版本
+
+当前版本 `0.0.1`，变更见 [CHANGELOG.md](CHANGELOG.md)。
+
 ## 许可证
 
 [MIT](LICENSE)。上游客户端与 Agent 的权利及许可证归其各自项目所有。
