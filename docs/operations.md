@@ -24,6 +24,8 @@ Master 统一存储与展示。每台采集端使用独立 backend 和认证令�
 
 ## 2. Master 前置准备
 
+Master 与 Agent 都按上游项目部署，本仓库只负责采集端。推荐顺序：**部署 Master → 在 Master 上创建 backend → 部署采集端 → 安装 Agent**。Agent 需要采集端的网关地址与令牌，因此应最后安装。
+
 按 [Neko Master 官方项目](https://github.com/foru17/neko-master)部署中心服务。本仓库不安装或升级 Master，也不假定具体主机、Docker 容器名、映射端口或存储位置。
 
 - 配置持久化存储、管理界面/API认证和适当的访问范围。

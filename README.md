@@ -16,7 +16,13 @@
 
 ## 开始使用
 
-先准备可访问的 Master、独立 Agent backend 和已运行的代理客户端，然后按[统一部署运维指南](docs/operations.md)部署采集端。采集端安装完成后，按安装器输出的命令（或[上游 Agent 指南](https://github.com/foru17/neko-master/blob/main/docs/agent/install.md)）安装 Agent。
+本仓库只提供采集端，Master 与 Agent 都按上游项目部署。推荐顺序：
+
+1. 确认代理客户端已运行，并暴露本机 socket（Linux MonoCloud / macOS MonoProxy）。
+2. 按 [Neko Master 官方项目](https://github.com/foru17/neko-master)部署 Master；本仓库不安装或升级 Master。
+3. 在 Master 上创建 Agent backend，取得 backend ID 与令牌。macOS 安装器也可以在提供管理令牌时自动创建。
+4. 按[部署与运维指南](docs/operations.md)部署采集端（bridge/adapter）。
+5. 采集端就绪后，按安装器输出的命令，或[上游 Agent 安装指南](https://github.com/foru17/neko-master/blob/main/docs/agent/install.md)，安装 Agent 并指向本机网关。
 
 Linux 提供 [agent.env.example](agent.env.example) 配置模板。Mac 安装器要求显式传入 Master URL，可通过受限权限文件传入管理 Bearer token，不包含任何默认私有服务器地址。
 
