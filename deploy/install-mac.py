@@ -14,10 +14,10 @@ import tempfile
 import urllib.request
 from urllib.parse import urlsplit
 
-from install_support import (InstallState, VERSION, agent_asset, encode_env, expected_agent_version,
-                             fetch_release, mac_plist, safe_error_code)
+from install_support import (InstallState, agent_command, encode_env, install_agent,
+                             mac_plist, safe_error_code)
 
-ASSET = agent_asset("mac")
+
 class NoManagementRedirects(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, request, fp, code, message, headers, newurl):
         # Do not forward management credentials, even to another path/origin.
@@ -60,10 +60,10 @@ def build_api(master, token_file=None, allow_insecure_http=False):
     return api
 
 
-def install(args, home=None, source=None, api=None, fetch=None, run=None):
+def install(args, home=None, source=None, api=None, run=None):
     home = Path(home or Path.home())
     source = Path(source or Path(__file__).resolve().parents[1])
-    fetch, run = fetch or fetch_release, run or subprocess.run
+    run = run or subprocess.run
     master = validate_master_url(args.master_url, args.allow_insecure_http)
     api = api or build_api(master, args.admin_token_file, args.allow_insecure_http)
     name = args.backend_name.strip()
@@ -81,10 +81,9 @@ def install(args, home=None, source=None, api=None, fetch=None, run=None):
     files = {target / file: (source / "mac" / file).read_bytes() for file in ("adapter.py", "protocol.py", "launcher.py")}
     files[target / "bridge.py"] = (source / "linux/bridge.py").read_bytes()
     plists = {}
-    for role in ("bridge", "agent"):
-        label, content = mac_plist(role, target, logs, python)
-        plists[launch / (label + ".plist")] = content
-    paths = list(files) + list(plists) + [target / "neko-agent", target / "release.txt", config]
+    label, content = mac_plist("bridge", target, logs, python)
+    plists[launch / (label + ".plist")] = content
+    paths = list(files) + list(plists) + [config]
     identity = {"master": master, "backend_name": name, "python": str(python)}
     with InstallState(folder, "mac", args.repair) as state:
         intent = {"backend_token": "ag_" + secrets.token_urlsafe(24),
@@ -101,16 +100,10 @@ def install(args, home=None, source=None, api=None, fetch=None, run=None):
         if state.data.get("backend_id") is not None:
             if not matching or matching[0].get("id") != state.data["backend_id"]:
                 raise ValueError("recorded_backend_missing_or_changed")
-        binary, digest = fetch(ASSET, args.download_proxy)
         with tempfile.TemporaryDirectory(prefix="neko-mac-stage-") as temporary:
-            staging = Path(temporary)
-            executable = staging / "neko-agent"
-            executable.write_bytes(binary); executable.chmod(0o700)
-            result = run([str(executable), "--version"], check=True, capture_output=True, text=True, timeout=30)
-            if result.stdout.strip() not in (expected_agent_version(), VERSION):
-                raise ValueError("unexpected_agent_version")
             for path, content in plists.items():
-                candidate = staging / path.name; candidate.write_bytes(content)
+                candidate = Path(temporary) / path.name
+                candidate.write_bytes(content)
                 run(["plutil", "-lint", str(candidate)], check=True, capture_output=True, text=True, timeout=30)
         if matching:
             backend = matching[0].get("id")
@@ -126,13 +119,11 @@ def install(args, home=None, source=None, api=None, fetch=None, run=None):
                   "NEKO_BACKEND_TOKEN": intent["backend_token"], "NEKO_GATEWAY_TYPE": "clash",
                   "NEKO_GATEWAY_URL": "http://127.0.0.1:19093", "NEKO_GATEWAY_TOKEN": intent["gateway_token"]}
         for path, content in files.items(): state.publish(path, content)
-        state.publish(target / "neko-agent", binary, 0o755)
         state.publish(config, encode_env(values), 0o600)
         for path, content in plists.items(): state.publish(path, content)
         logs.mkdir(mode=0o700, parents=True, exist_ok=True); logs.chmod(0o700)
-        state.publish(target / "release.txt", ("Agent=" + VERSION + "\nAssetSHA256=" + digest + "\nBackendID=" + str(backend) + "\n").encode())
         state.finish()
-    return {"id": backend, "version": VERSION, "sha256": digest}
+    return {"id": backend, "values": values}
 
 
 def main():
@@ -140,18 +131,31 @@ def main():
     parser.add_argument("--master-url", required=True, help="Master base URL; no credentials in URL")
     parser.add_argument("--backend-name", default="monocloud-mac")
     parser.add_argument("--admin-token-file", type=Path, help="0600 file containing a Master management Bearer token")
-    parser.add_argument("--download-proxy", help="Optional HTTPS download proxy URL")
     parser.add_argument("--python", default=shutil.which("python3"), help="Persistent Python runtime for LaunchAgent")
     parser.add_argument("--allow-insecure-http", action="store_true", help="Explicitly allow remote HTTP on a separately trusted/encrypted network")
     parser.add_argument("--repair", action="store_true", help="Resume only files/backend owned by the private installation journal")
+    parser.add_argument("--install-agent", action="store_true",
+                        help="Run the official neko-agent installer after deploying the adapter")
     args = parser.parse_args()
     if platform.system() != "Darwin" or platform.machine() != "arm64":
         raise SystemExit("Requires macOS arm64")
     try:
         result = install(args)
+        home = Path.home()
+        print("Installed backend", result["id"], "; jobs validated, not started")
+        if args.install_agent:
+            install_agent("mac", result["values"], home)
+            print("The official agent installer has run; keep NEKO_AGENT_CONFIG_DIR/STATE_DIR exported, then check with:")
+            print("  nekoagent status backend-" + str(result["id"]))
+        else:
+            print("Install the official neko-agent with the command below")
+            print("(upstream guide: https://github.com/foru17/neko-master/blob/main/docs/agent/install.md):")
+            print()
+            print(agent_command("mac", home))
     except Exception as error:
-        raise SystemExit("Installation failed (" + safe_error_code(error) + "); keep private install-state.json (backend may already exist); resolve conflicts and rerun the same arguments with --repair") from None
-    print("Installed backend", result["id"], result["version"], "SHA256", result["sha256"], "; jobs validated, not started")
+        raise SystemExit("Installation failed (" + safe_error_code(error)
+                         + "); keep private install-state.json (backend may already exist); resolve conflicts and rerun the same arguments with --repair") from None
 
 
-if __name__ == "__main__": main()
+if __name__ == "__main__":
+    main()

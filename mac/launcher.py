@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 """LaunchAgent supervisor: private configuration, graceful stop, bounded logs."""
-import json
 import logging
 from logging.handlers import RotatingFileHandler
 import os
@@ -11,7 +10,6 @@ import selectors
 import subprocess
 import sys
 import time
-import urllib.request
 
 
 def load_config(path):
@@ -111,7 +109,7 @@ def run_logged(command, env, path, max_bytes=1048576, stop_timeout=15):
 
 def main():
     role = sys.argv[1]
-    if role not in ("agent", "bridge"):
+    if role != "bridge":
         raise ValueError("unknown_role")
     root = Path(__file__).resolve().parent
     cfg = load_config(Path.home() / ".config/monocloud-neko-bridge-mac/agent.env")
@@ -120,25 +118,7 @@ def main():
     env["PYTHONDONTWRITEBYTECODE"] = "1"
     logs = Path.home() / ".local/state/monocloud-neko-bridge-mac"
     logs.mkdir(mode=0o700, parents=True, exist_ok=True)
-    if role == "bridge":
-        command = [sys.executable, "-B", str(root / "adapter.py")]
-    else:
-        # Wait for an initial complete source snapshot before starting Agent.
-        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-        for attempt in range(30):
-            try:
-                req = urllib.request.Request(cfg["NEKO_GATEWAY_URL"].rstrip("/") + "/health", headers={"Authorization": "Bearer " + cfg["NEKO_GATEWAY_TOKEN"]})
-                with opener.open(req, timeout=2) as response:
-                    if json.load(response).get("status") == "healthy":
-                        break
-            except (OSError, ValueError):
-                pass
-            time.sleep(1)
-        else:
-            raise RuntimeError("gateway_not_ready")
-        command = [str(root / "neko-agent")]
-        for key, flag in (("NEKO_SERVER", "--server-url"), ("NEKO_BACKEND_ID", "--backend-id"), ("NEKO_BACKEND_TOKEN", "--backend-token"), ("NEKO_GATEWAY_TYPE", "--gateway-type"), ("NEKO_GATEWAY_URL", "--gateway-url"), ("NEKO_GATEWAY_TOKEN", "--gateway-token")):
-            command.extend((flag, cfg[key]))
+    command = [sys.executable, "-B", str(root / "adapter.py")]
     return run_logged(command, env, logs / (role + ".log"))
 
 

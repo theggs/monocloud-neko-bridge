@@ -54,8 +54,6 @@ class FakeRun:
                     raise subprocess.CalledProcessError(5, args)
                 self.active.add(role)
                 return SimpleNamespace(returncode=0)
-        if args[-1] == "--version":
-            return SimpleNamespace(returncode=0, stdout="9.9.9\n", stderr="")
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
     def commands(self):
@@ -77,17 +75,12 @@ class UpgradeTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.home = Path(self.temp.name)
         self.run = FakeRun()
-        self.fetches = []
         self.probes = []
         self.probe_error = None
         self.probe_status = 200
 
     def tearDown(self):
         self.temp.cleanup()
-
-    def fetch(self, asset, proxy=None):
-        self.fetches.append(asset)
-        return b"new agent", "abc123"
 
     def probe(self, url, token):
         self.probes.append((url, token))
@@ -103,45 +96,42 @@ class UpgradeTests(unittest.TestCase):
         values.update(extra or {})
         return values
 
-    def install(self, kind="linux", agent="agent-v1.4.8", current=False, python=None):
+    def collector_files(self, kind, paths, current=False):
+        if kind == "linux":
+            bridge = (ROOT / "linux/bridge.py").read_bytes() if current else b"old bridge"
+            unit = (ROOT / "deploy/monocloud-neko-bridge.service").read_bytes() if current else b"old unit"
+            return {paths["target"] / "bridge.py": bridge,
+                    paths["units"] / "monocloud-neko-bridge.service": unit}
+        return {paths["target"] / name: (ROOT / "mac" / name).read_bytes() if current else b"old " + name.encode()
+                for name in ("adapter.py", "protocol.py", "launcher.py", "bridge.py")}
+
+    def write_config(self, paths, kind):
+        values = self.settings(kind)
+        paths["config"].parent.mkdir(parents=True, exist_ok=True)
+        paths["config"].write_text("".join(key + "=" + value + "\n" for key, value in values.items()))
+        paths["config"].chmod(0o600)
+        return values
+
+    def install(self, kind="linux", current=False, python=None):
         paths = self.upgrade.installation(self.home, kind)
         paths["target"].mkdir(parents=True)
         paths["state"].mkdir(parents=True)
-        values = self.settings(kind)
-        paths["config"].write_text("".join(key + "=" + value + "\n" for key, value in values.items()))
-        paths["config"].chmod(0o600)
-        files = {}
-        if kind == "linux":
-            payload = ({"bridge.py": (ROOT / "linux/bridge.py").read_bytes(),
-                        "run_agent.py": (ROOT / "linux/run_agent.py").read_bytes(),
-                        "monocloud-neko-bridge.service": (ROOT / "deploy/monocloud-neko-bridge.service").read_bytes(),
-                        "monocloud-neko-agent.service": (ROOT / "deploy/monocloud-neko-agent.service").read_bytes()}
-                       if current else {})
-            files[paths["target"] / "bridge.py"] = payload.get("bridge.py", b"old bridge")
-            files[paths["target"] / "run_agent.py"] = payload.get("run_agent.py", b"old run")
-            files[paths["units"] / "monocloud-neko-bridge.service"] = payload.get(
-                "monocloud-neko-bridge.service", b"old bridge unit")
-            files[paths["units"] / "monocloud-neko-agent.service"] = payload.get(
-                "monocloud-neko-agent.service", b"old agent unit")
-            identity = {}
-        else:
+        values = self.write_config(paths, kind)
+        files = self.collector_files(kind, paths, current)
+        if kind == "mac":
             paths["launch"].mkdir(parents=True)
-            paths["logs"].mkdir(parents=True)
-            files[paths["target"] / "adapter.py"] = b"old adapter"
-            files[paths["target"] / "protocol.py"] = b"old protocol"
-            files[paths["target"] / "launcher.py"] = b"old launcher"
-            files[paths["target"] / "bridge.py"] = b"old bridge"
-            files[paths["launch"] / "io.monocloud-neko.bridge.plist"] = b"old plist"
-            files[paths["launch"] / "io.monocloud-neko.agent.plist"] = b"old plist"
+            if current:
+                label, content = self.upgrade.mac_plist("bridge", paths["target"], paths["logs"], Path(python or sys.executable))
+            else:
+                label, content = "io.monocloud-neko.bridge", b"old plist"
+            files[paths["launch"] / (label + ".plist")] = content
             identity = {"master": "https://neko.example.invalid", "backend_name": "synthetic-device",
                         "python": python or sys.executable}
-        files[paths["target"] / "neko-agent"] = b"old agent"
-        files[paths["target"] / "release.txt"] = ("Agent=" + agent + "\nAssetSHA256=olddigest\n"
-                                                 + ("BackendID=7\n" if kind == "mac" else "")).encode()
+        else:
+            identity = {}
         for path, content in files.items():
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(content)
-        (paths["target"] / "neko-agent").chmod(0o755)
         artifacts = {str(path): hashlib.sha256(content).hexdigest() for path, content in files.items()}
         if kind == "mac":
             artifacts[str(paths["config"])] = hashlib.sha256(paths["config"].read_bytes()).hexdigest()
@@ -156,43 +146,31 @@ class UpgradeTests(unittest.TestCase):
         paths = self.upgrade.installation(self.home, kind)
         values = self.settings(kind)
         config = "".join(key + "=" + value + "\n" for key, value in values.items()).encode()
-        paths["config"].parent.mkdir(parents=True, exist_ok=True)
-        files = {}
-        if kind == "linux":
-            files[paths["target"] / "bridge.py"] = b"old bridge"
-            files[paths["target"] / "run_agent.py"] = b"old run"
-            files[paths["units"] / "monocloud-neko-bridge.service"] = b"old bridge unit"
-            files[paths["units"] / "monocloud-neko-agent.service"] = b"old agent unit"
-            identity = {}
-        else:
+        files = self.collector_files(kind, paths)
+        if kind == "mac":
             paths["launch"].mkdir(parents=True)
-            files[paths["target"] / "adapter.py"] = b"old adapter"
-            files[paths["target"] / "protocol.py"] = b"old protocol"
-            files[paths["target"] / "launcher.py"] = b"old launcher"
-            files[paths["target"] / "bridge.py"] = b"old bridge"
             files[paths["launch"] / "io.monocloud-neko.bridge.plist"] = b"old plist"
-            files[paths["launch"] / "io.monocloud-neko.agent.plist"] = b"old plist"
             identity = {"master": "https://neko.example.invalid", "backend_name": "synthetic-device",
                         "python": sys.executable}
-        files[paths["target"] / "neko-agent"] = b"old agent"
-        files[paths["target"] / "release.txt"] = ("Agent=agent-v1.4.8\nAssetSHA256=olddigest\n"
-                                                 + ("BackendID=7\n" if kind == "mac" else "")).encode()
+        else:
+            identity = {}
         paths_list = list(files) + ([paths["config"]] if kind == "mac" else [])
         with self.upgrade.InstallState(paths["state"], kind) as state:
             state.prepare(identity, paths_list)
             if kind == "mac":
                 state.publish(paths["config"], config, 0o600)
             else:
+                paths["config"].parent.mkdir(parents=True, exist_ok=True)
                 paths["config"].write_bytes(config)
                 paths["config"].chmod(0o600)
             for path, content in files.items():
-                state.publish(path, content, 0o755 if path.name == "neko-agent" else 0o644)
+                state.publish(path, content)
             state.finish()
         return paths
 
     def upgrade_now(self, kind="linux", **kwargs):
         return self.upgrade.upgrade(home=self.home, source=ROOT, kind=kind, run=self.run,
-                                    fetch=self.fetch, probe=self.probe, **kwargs)
+                                    probe=self.probe, **kwargs)
 
     def test_linux_upgrade_replaces_files_and_keeps_config(self):
         paths, old, values = self.install()
@@ -200,17 +178,38 @@ class UpgradeTests(unittest.TestCase):
         result = self.upgrade_now()
         self.assertEqual(result["status"], "upgraded")
         self.assertEqual((paths["target"] / "bridge.py").read_bytes(), (ROOT / "linux/bridge.py").read_bytes())
-        self.assertEqual((paths["target"] / "run_agent.py").read_bytes(), (ROOT / "linux/run_agent.py").read_bytes())
         self.assertEqual(paths["config"].read_bytes(), config_before)
-        self.assertEqual(result["restarted"], ["bridge", "agent"])
+        self.assertEqual(result["restarted"], ["bridge"])
         self.assertLess(self.run.find(" stop "), self.run.find(" start "))
         self.assertEqual(self.probes, [(values["NEKO_GATEWAY_URL"], values["NEKO_GATEWAY_TOKEN"])])
         self.assertTrue(Path(result["backup"]).is_dir())
-        self.assertEqual((paths["target"] / "release.txt").read_bytes(), old[paths["target"] / "release.txt"])
         journal = json.loads((paths["state"] / "install-state.json").read_text())
         digest = hashlib.sha256((paths["target"] / "bridge.py").read_bytes()).hexdigest()
         self.assertEqual(journal["artifacts"][str(paths["target"] / "bridge.py")], digest)
         self.assertEqual(journal["bridge_version"], "v0.0.2")
+
+    def test_legacy_agent_files_can_be_removed_after_migration(self):
+        for kind in ("linux", "mac"):
+            with self.subTest(kind=kind):
+                self.tearDown()
+                self.setUp()
+                paths, _, _ = self.install(kind)
+                legacy = {paths["target"] / "run_agent.py": b"old runner",
+                          paths["target"] / "neko-agent": b"old agent",
+                          paths["target"] / "release.txt": b"Agent=agent-v1.4.8\n"}
+                if kind == "linux":
+                    legacy[paths["units"] / "monocloud-neko-agent.service"] = b"old unit"
+                else:
+                    legacy[paths["launch"] / "io.monocloud-neko.agent.plist"] = b"old plist"
+                journal = json.loads((paths["state"] / "install-state.json").read_text())
+                for path, content in legacy.items():
+                    path.write_bytes(content)
+                    journal["artifacts"][str(path)] = hashlib.sha256(content).hexdigest()
+                (paths["state"] / "install-state.json").write_text(json.dumps(journal))
+                self.assertEqual(self.upgrade_now(kind)["status"], "upgraded")
+                for path in legacy:
+                    path.unlink()
+                self.assertEqual(self.upgrade_now(kind)["status"], "up-to-date")
 
     def test_installer_journal_is_accepted_for_both_platforms(self):
         for kind in ("linux", "mac"):
@@ -230,7 +229,6 @@ class UpgradeTests(unittest.TestCase):
             self.upgrade_now()
         self.assertEqual(caught.exception.keys, ["NEKO_SERVER"])
         self.assertEqual(self.run.calls, [])
-        self.assertEqual(self.fetches, [])
 
     def test_permissive_config_is_rejected_without_writes(self):
         paths, old, _ = self.install()
@@ -303,31 +301,17 @@ class UpgradeTests(unittest.TestCase):
         self.assertNotIn("stop", " ".join(self.run.commands()))
         self.assertFalse((self.home / ".local/state/monocloud-neko-upgrade").exists())
 
-    def test_new_pinned_agent_is_downloaded_and_recorded(self):
-        paths, _, _ = self.install(agent="agent-v1.4.8")
-        support = sys.modules["install_support"]
-        with patch.object(self.upgrade, "VERSION", "agent-v9.9.9"), \
-             patch.object(support, "VERSION", "agent-v9.9.9"):
-            result = self.upgrade_now()
-        self.assertEqual(result["status"], "upgraded")
-        self.assertEqual(self.fetches, ["neko-agent_agent-v9.9.9_linux_amd64.tar.gz"])
-        self.assertEqual((paths["target"] / "neko-agent").read_bytes(), b"new agent")
-        self.assertEqual((paths["target"] / "release.txt").read_text(),
-                         "Agent=agent-v9.9.9\nAssetSHA256=abc123\n")
-
-    def test_mac_upgrade_copies_linux_bridge_and_regenerates_plists(self):
+    def test_mac_upgrade_copies_linux_bridge_and_regenerates_plist(self):
         paths, old, values = self.install("mac")
         config_before = paths["config"].read_bytes()
         result = self.upgrade_now("mac")
         self.assertEqual(result["status"], "upgraded")
         self.assertEqual((paths["target"] / "bridge.py").read_bytes(), (ROOT / "linux/bridge.py").read_bytes())
         self.assertEqual(paths["config"].read_bytes(), config_before)
-        self.assertEqual(result["restarted"], ["bridge", "agent"])
+        self.assertEqual(result["restarted"], ["bridge"])
         plist = plistlib.loads((paths["launch"] / "io.monocloud-neko.bridge.plist").read_bytes())
         self.assertEqual(plist["Label"], "io.monocloud-neko.bridge")
         self.assertEqual(plist["ProgramArguments"][-1], "bridge")
-        self.assertLess(self.run.find("bootout", "agent"), self.run.find("bootout", "bridge"))
-        self.assertLess(self.run.find("bootstrap", "bridge"), self.run.find("bootstrap", "agent"))
         self.assertEqual(len(self.probes), 1)
 
     def test_mac_bootstrap_retries_after_throttle_error(self):
@@ -346,6 +330,14 @@ class UpgradeTests(unittest.TestCase):
         self.assertEqual(str(caught.exception), "persistent_python_is_not_executable")
         self.assertEqual(self.run.calls, [])
 
+    def test_missing_installation_journal_is_reported(self):
+        paths = self.upgrade.installation(self.home, "linux")
+        paths["state"].mkdir(parents=True)
+        self.write_config(paths, "linux")
+        with self.assertRaises(ValueError) as caught:
+            self.upgrade_now()
+        self.assertEqual(str(caught.exception), "installation_not_found")
+
     def test_legacy_install_requires_adopt_and_can_be_adopted(self):
         paths, old, _ = self.install()
         (paths["state"] / "install-state.json").unlink()
@@ -359,28 +351,16 @@ class UpgradeTests(unittest.TestCase):
         self.assertFalse((paths["state"] / "install-state.json").exists())
         self.assertEqual(self.upgrade_now(adopt=True)["status"], "up-to-date")
 
-    def test_legacy_mac_install_recovers_python_from_plist(self):
-        paths, old, _ = self.install("mac")
-        for role in ("bridge", "agent"):
-            label, content = self.upgrade.mac_plist(role, paths["target"], paths["logs"], Path(sys.executable))
-            (paths["launch"] / (label + ".plist")).write_bytes(content)
-        (paths["state"] / "install-state.json").unlink()
-        self.run.active = set()
-        result = self.upgrade_now("mac", adopt=True)
-        self.assertEqual(result["status"], "upgraded")
-        self.assertTrue(result["adopted"])
-        self.assertEqual((paths["target"] / "adapter.py").read_bytes(), (ROOT / "mac/adapter.py").read_bytes())
-        self.assertFalse((paths["state"] / "install-state.json").exists())
-
     def test_adopt_rollback_removes_files_it_created(self):
         paths, old, _ = self.install()
-        (paths["target"] / "run_agent.py").unlink()
+        unit = paths["units"] / "monocloud-neko-bridge.service"
+        unit.unlink()
         (paths["state"] / "install-state.json").unlink()
         self.probe_error = ValueError("health_check_timeout")
         with self.assertRaises(self.upgrade.UpgradeError) as caught:
             self.upgrade_now(adopt=True)
         self.assertEqual(caught.exception.code, "health_check_timeout")
-        self.assertFalse((paths["target"] / "run_agent.py").exists())
+        self.assertFalse(unit.exists())
         self.assertEqual((paths["target"] / "bridge.py").read_bytes(), old[paths["target"] / "bridge.py"])
         self.assertFalse((paths["state"] / "install-state.json").exists())
 
@@ -412,42 +392,15 @@ class UpgradeTests(unittest.TestCase):
         self.assertEqual(self.run.calls, [])
         self.assertEqual((paths["target"] / "bridge.py").read_bytes(), old[paths["target"] / "bridge.py"])
 
-    def test_mac_adopt_new_agent_requires_backend_id(self):
-        paths, old, _ = self.install("mac")
-        for role in ("bridge", "agent"):
-            label, content = self.upgrade.mac_plist(role, paths["target"], paths["logs"], Path(sys.executable))
-            (paths["launch"] / (label + ".plist")).write_bytes(content)
-        (paths["target"] / "release.txt").write_text("Agent=agent-v1.4.8\nAssetSHA256=olddigest\n")
-        (paths["state"] / "install-state.json").unlink()
-        support = sys.modules["install_support"]
-        with patch.object(self.upgrade, "VERSION", "agent-v9.9.9"), \
-             patch.object(support, "VERSION", "agent-v9.9.9"):
-            with self.assertRaises(ValueError) as caught:
-                self.upgrade_now("mac", adopt=True)
-        self.assertEqual(str(caught.exception), "missing_recorded_backend")
-        self.assertEqual((paths["target"] / "neko-agent").read_bytes(), old[paths["target"] / "neko-agent"])
-
     def test_adopt_requires_existing_installation_files(self):
         paths = self.upgrade.installation(self.home, "linux")
         paths["state"].mkdir(parents=True)
-        values = self.settings("linux")
-        paths["config"].write_text("".join(key + "=" + value + "\n" for key, value in values.items()))
-        paths["config"].chmod(0o600)
+        self.write_config(paths, "linux")
         with self.assertRaises(ValueError) as caught:
             self.upgrade_now(adopt=True)
         self.assertEqual(str(caught.exception), "legacy_installation_incomplete")
         self.assertEqual(self.run.calls, [])
         self.assertFalse((paths["target"] / "bridge.py").exists())
-
-    def test_missing_installation_journal_is_reported(self):
-        paths = self.upgrade.installation(self.home, "linux")
-        paths["state"].mkdir(parents=True)
-        values = self.settings("linux")
-        paths["config"].write_text("".join(key + "=" + value + "\n" for key, value in values.items()))
-        paths["config"].chmod(0o600)
-        with self.assertRaises(ValueError) as caught:
-            self.upgrade_now()
-        self.assertEqual(str(caught.exception), "installation_not_found")
 
 
 if __name__ == "__main__":

@@ -45,35 +45,36 @@ install -d -m 700 "$HOME/.config/monocloud-neko-bridge"
 install -m 600 agent.env.example "$HOME/.config/monocloud-neko-bridge/agent.env"
 ```
 
-用本机编辑器填入实际 Master URL、backend ID、该backend令牌和独立随机网关令牌。模板中的 `example.invalid` 和 `replace-with-...` 不是可用配置。然后安装：
+用本机编辑器填入实际 Master URL、backend ID、该backend令牌和独立随机网关令牌。模板中的 `example.invalid` 和 `replace-with-...` 不是可用配置。然后部署采集端：
 
 ```sh
 python3 -B deploy/install-linux.py
 systemctl --user daemon-reload
-systemctl --user enable --now monocloud-neko-bridge.service monocloud-neko-agent.service
+systemctl --user enable --now monocloud-neko-bridge.service
 ```
 
-下载需要代理时，仅为安装进程设置 `https_proxy` 环境变量。安装器在临时目录校验官方发行包、版本及service后才发布文件。私有目录中保留0600安装记录；新安装中途失败后用 `python3 -B deploy/install-linux.py --repair` 恢复已记录的操作，不覆盖冲突文件。Linux恢复时允许修正私有配置，安装器每次重新校验配置；服务使用的 `/usr/bin/python3` 会在下载前校验。错误只输出固定错误码或HTTP状态，不输出令牌与远端正文。没有新格式安装记录的旧安装仍拒绝覆盖，不修改既有代理客户端。
+安装器只部署 bridge 与一个用户级 service，并打印一条从该私有配置读取凭据的官方 Agent 安装命令。它不下载或保存 `neko-agent`；Agent 的安装、常驻和升级按[上游安装指南](https://github.com/foru17/neko-master/blob/main/docs/agent/install.md)执行。可加 `--install-agent` 让安装器直接运行该命令；这会从上游仓库下载脚本并以当前用户执行，令牌经环境变量传给该脚本及其子进程，执行即表示信任上游脚本与 GitHub TLS 链路。上游在 Linux 上的 systemd 自启是系统级、需要 root；不使用 root 时可用 `nekoagent start backend-<id>` 运行，但不会随开机启动。命令中的 `NEKO_AGENT_CONFIG_DIR` 与 `NEKO_AGENT_STATE_DIR` 是 `nekoagent` 的运行时变量，请一并加入 shell profile，否则后续 `nekoagent` 命令会回到系统默认目录。
+
+安装器在发布文件前校验配置、`/usr/bin/python3` 与 service。私有目录中保留0600安装记录；新安装中途失败后用 `python3 -B deploy/install-linux.py --repair` 恢复已记录的操作，不覆盖冲突文件。Linux恢复时允许修正私有配置。错误只输出固定错误码，不输出令牌与远端正文。不修改既有代理客户端。
 
 | 文件 | 位置 |
 |---|---|
-| 运行程序 | `~/.local/lib/monocloud-neko-bridge/` |
+| 运行程序 | `~/.local/lib/monocloud-neko-bridge/`（仅 `bridge.py`） |
 | 私有配置 | `~/.config/monocloud-neko-bridge/agent.env` |
-| 用户service | `~/.config/systemd/user/monocloud-neko-{bridge,agent}.service` |
+| 用户service | `~/.config/systemd/user/monocloud-neko-bridge.service` |
 
 日常操作：
 
 ```sh
-systemctl --user is-active monocloud-neko-bridge.service monocloud-neko-agent.service
-systemctl --user is-enabled monocloud-neko-bridge.service monocloud-neko-agent.service
-systemctl --user restart monocloud-neko-bridge.service monocloud-neko-agent.service
-systemctl --user stop monocloud-neko-agent.service monocloud-neko-bridge.service
-systemctl --user start monocloud-neko-bridge.service monocloud-neko-agent.service
-journalctl --user -u monocloud-neko-bridge.service -u monocloud-neko-agent.service -n 40 --no-pager
+systemctl --user is-active monocloud-neko-bridge.service
+systemctl --user restart monocloud-neko-bridge.service
+systemctl --user stop monocloud-neko-bridge.service
+journalctl --user -u monocloud-neko-bridge.service -n 40 --no-pager
 ss -lnt | rg ':19092 '
+nekoagent status backend-1   # Agent 状态，实例名以安装时为准
 ```
 
-修改service后先daemon-reload。bridge监听就绪后通知systemd，再启动Agent。需要退出登录后继续运行时，根据主机策略配置用户linger；它并不负责启动图形代理客户端。客户端必须运行并创建socket。
+修改service后先daemon-reload。bridge监听就绪后通知systemd；Agent 由上游工具管理，首次启动前确认 bridge 已监听。需要退出登录后继续运行时，根据主机策略配置用户linger；客户端必须运行并创建socket。
 
 ## 4. macOS 安装与服务
 
@@ -89,46 +90,42 @@ python3 -B deploy/install-mac.py \
   --python /path/to/persistent/python3
 ```
 
-管理令牌文件应置于私有目录并chmod0600。只有Master确实不要求认证时才省略此参数。非回环HTTP默认拒绝；在已经确认由独立加密通道保护的可信网络上使用HTTP，需显式加 `--allow-insecure-http`，否则使用HTTPS。可选 `--download-proxy` 用于下载官方Agent；也可以使用当前进程的代理环境。不要将管理令牌嵌入URL。
+管理令牌文件应置于私有目录并chmod0600。只有Master确实不要求认证时才省略此参数。非回环HTTP默认拒绝；在已经确认由独立加密通道保护的可信网络上使用HTTP，需显式加 `--allow-insecure-http`，否则使用HTTPS。不要将管理令牌嵌入URL。
 
-安装器先校验本地目标、Python、官方Agent和plist，再创建独立backend并原子发布配置和程序，不自动加载作业。私有配置目录中的0600 `install-state.json` 保存安装意图、backend/gateway令牌及已发布文件校验值；不要删除或公开它。失败后修正网络/权限问题，用相同参数加 `--repair` 重跑；若尚未尝试创建backend、且没有发布任何文件，可以在 `--repair` 时修正Master地址、backend名称或Python路径。尝试创建后这些参数固定，防止遗失远端归属。仅接受该次安装记录匹配的远端backend和本地文件，不接管其他同名backend。创建响应丢失时，通过唯一安装标识核对已创建backend，继续使用原令牌。该功能不升级旧安装；旧版本没有安装记录时仍拒绝覆盖。
+安装器先校验本地目标、Python 与 plist，再创建独立backend并原子发布配置、程序和 bridge 的 LaunchAgent，不自动加载作业；它不再下载或保存 `neko-agent`。安装完成后按输出的官方 Agent 安装命令执行（或安装时加 `--install-agent`）。该命令会从上游仓库下载脚本并以当前用户执行，令牌经环境变量传递。上游在 macOS 使用 `~/Library/LaunchAgents`，保持非 root。命令中的 `NEKO_AGENT_CONFIG_DIR` 与 `NEKO_AGENT_STATE_DIR` 是 `nekoagent` 的运行时变量，请一并加入 shell profile，否则后续 `nekoagent` 命令会找不到实例。
+
+私有配置目录中的0600 `install-state.json` 保存安装意图、backend/gateway令牌及已发布文件校验值；不要删除或公开它。失败后修正网络/权限问题，用相同参数加 `--repair` 重跑；若尚未尝试创建backend、且没有发布任何文件，可以在 `--repair` 时修正Master地址、backend名称或Python路径。尝试创建后这些参数固定，防止遗失远端归属。仅接受该次安装记录匹配的远端backend和本地文件，不接管其他同名backend。创建响应丢失时，通过唯一安装标识核对已创建backend，继续使用原令牌。该功能不升级旧安装；旧版本没有安装记录时仍拒绝覆盖。
 
 | 文件 | 位置 |
 |---|---|
-| 运行程序 | `~/.local/lib/monocloud-neko-bridge-mac/` |
+| 运行程序 | `~/.local/lib/monocloud-neko-bridge-mac/`（adapter、protocol、launcher、bridge） |
 | 私有配置 | `~/.config/monocloud-neko-bridge-mac/agent.env` |
-| plist | `~/Library/LaunchAgents/io.monocloud-neko.{bridge,agent}.plist` |
+| plist | `~/Library/LaunchAgents/io.monocloud-neko.bridge.plist` |
 | 运行日志 | `~/.local/state/monocloud-neko-bridge-mac/` |
 
 加载与查看：
 
 ```sh
 launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/io.monocloud-neko.bridge.plist
-launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/io.monocloud-neko.agent.plist
 launchctl print "gui/$(id -u)/io.monocloud-neko.bridge"
-launchctl print "gui/$(id -u)/io.monocloud-neko.agent"
 lsof -nP -iTCP:19093 -sTCP:LISTEN
+nekoagent status backend-1
 ```
 
-重启：
+重启与停止采集端：
 
 ```sh
-launchctl kill SIGTERM "gui/$(id -u)/io.monocloud-neko.agent"
 launchctl kill SIGTERM "gui/$(id -u)/io.monocloud-neko.bridge"
-```
-
-启动器先向仍在运行的主进程组转发终止信号，超过15秒则强制结束。若主进程已经退出、但后代仍持有日志管道，最多读取15秒尾部日志后退出；不会对已回收的进程组ID发信号，也不保证回收自行派生的后台后代。KeepAlive重新拉起作业，受launchd节流影响可能等待约10秒。作业PID只证明启动器存在，还需检查采集接口与上报状态。
-
-停止并卸载当前会话作业：
-
-```sh
-launchctl bootout "gui/$(id -u)/io.monocloud-neko.agent"
 launchctl bootout "gui/$(id -u)/io.monocloud-neko.bridge"
 ```
 
+Agent 的重启、停止与卸载使用上游命令：`nekoagent restart|stop|remove <instance>`。
+
+启动器先向仍在运行的主进程组转发终止信号，超过15秒则强制结束。若主进程已经退出、但后代仍持有日志管道，最多读取15秒尾部日志后退出；不会对已回收的进程组ID发信号，也不保证回收自行派生的后台后代。KeepAlive重新拉起作业，受launchd节流影响可能等待约10秒。作业PID只证明启动器存在，还需检查采集接口与上报状态。
+
 刚bootout后立即bootstrap可能因注销未完成报错误5，先确认状态、等待后重试，不要改用root加载。LaunchAgent只在此用户登录会话运行，客户端也需运行。
 
-`bridge.log`、`agent.log`各按约1MiB轮转，最多各保留2个旧副本。`*-launch.log`接收启动器自身错误；持续启动失败时先修复原因，再停作业清理诊断文件。
+`bridge.log`各按约1MiB轮转，最多保留2个旧副本。`bridge-launch.log`接收启动器自身错误；持续启动失败时先修复原因，再停作业清理诊断文件。Agent 日志使用 `nekoagent logs <instance>`。
 
 Mac IPC 的默认握手值是MonoProxy 1.3.0应用内置常量，不是账号凭证。兼容版本需要不同值时，可在私有配置中设置 `MONOPROXY_LOCAL_PASSWORD`，不要修改公开源码写入用户秘密。
 
@@ -168,15 +165,15 @@ Linux `/health` 是最近一次读取结果，不是持续探测。Mac默认每1
 
 Master：备份实际数据卷及部署配置，升级与数据库回滚按上游要求处理。保留时长与备份周期由部署者按容量与恢复目标配置，本仓库不强制默认策略。
 
-采集端：备份对应专用程序、私有配置及service/plist。升级在目标版本仓库中运行 `python3 -B deploy/upgrade.py`：自动检查配置必填项、备份、只替换变化的文件、按需下载并校验Agent、重启并检查 `/health`，失败时自动回滚；备份位于 `~/.local/state/monocloud-neko-upgrade/`。脚本只处理存在 `install-state.json` 的安装；旧安装可按[升级指南](upgrade.md)用 `--adopt` 接管（不校验已装文件），或重新安装。安装脚本当前固定Agent1.4.8，不能仅改文档版本号就升级。
+采集端：备份对应专用程序、私有配置及service/plist。升级在目标版本仓库中运行 `python3 -B deploy/upgrade.py`：自动检查配置必填项、备份、只替换变化的文件、重启采集端并检查 `/health`，失败时自动回滚；备份位于 `~/.local/state/monocloud-neko-upgrade/`。脚本只处理存在 `install-state.json` 的安装；旧安装可按[升级指南](upgrade.md)用 `--adopt` 接管（不校验已装文件），或重新安装。Agent 的升级使用上游 `nekoagent upgrade`，它与本脚本互不管理；旧版本安装的 Agent unit/plist 以及 `run_agent.py`、`neko-agent`、`release.txt` 按升级指南迁移后删除。
 
 Linux卸载前：
 
 ```sh
-systemctl --user disable --now monocloud-neko-agent.service monocloud-neko-bridge.service
+systemctl --user disable --now monocloud-neko-bridge.service
 ```
 
-再按需删除Linux专用程序、配置及两份service并daemon-reload。Mac先bootout，再移除专用plist，防止下次登录启动，按需删除专用程序、配置及日志。不要删除客户端账号数据、其他Agent或其他backend。
+再按需删除Linux专用程序、配置及service并daemon-reload。Mac先bootout `io.monocloud-neko.bridge`，再移除对应plist，防止下次登录启动，按需删除专用程序、配置及日志。Agent 使用 `nekoagent remove <instance>` 与 `nekoagent uninstall` 卸载。不要删除客户端账号数据、其他Agent或其他backend。
 
 停用采集端不会删除Master历史数据；删除backend与清理统计应单独决定。不要批量删除其他服务的journal。
 

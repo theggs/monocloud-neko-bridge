@@ -4,13 +4,19 @@
 
 ## 未发布
 
+### 变更
+
+- Agent 的安装与升级交还官方 `install.sh` / `nekoagent`：安装器只部署采集端并输出可直接执行的官方命令（可选 `--install-agent`），不再下载或保存 `neko-agent`。
+- 删除 `linux/run_agent.py`、Agent 的 systemd unit 与 LaunchAgent、Agent 下载校验逻辑及 `release.txt`；升级脚本只处理 bridge/adapter。
+- 旧安装的迁移步骤见[升级指南](docs/upgrade.md#从旧版本迁移把-agent-交还官方)。
+
 ### 新增
 
-- 一键升级：`deploy/upgrade.py` 自动检查配置必填项、备份、只替换变化的文件、按需下载并校验 Agent、重启服务并检查 `/health`，失败时自动回滚。无需手工比对配置或逐文件操作；没有安装记录的旧安装可用 `--adopt`。
+- 一键升级：`deploy/upgrade.py` 自动检查配置必填项、备份、只替换变化的文件、重启采集端并检查 `/health`，失败时自动回滚。无需手工比对配置或逐文件操作；没有安装记录的旧安装可用 `--adopt`。
 
 ### 文档
 
-- 新增[升级指南](docs/upgrade.md)：一条命令的升级流程、失败处理，以及需要手工处理的例外情况。
+- 新增[升级指南](docs/upgrade.md)：一条命令的升级流程、失败处理、Agent 迁移与需要手工处理的例外情况。
 
 ### 修复
 

@@ -10,13 +10,13 @@
 
 - **Linux bridge**：将现有 Mihomo Unix socket 转为带 Bearer 鉴权的本机只读 HTTP 接口。
 - **macOS adapter**：订阅 MonoProxy 本地 socket，转换为 Agent 可读的连接快照，并短暂保留关闭记录。
-- **官方 Agent**：每台设备独立安装、使用独立 backend/token，连接同一个 Master。
+- **官方 Agent**：由上游 `install.sh` / `nekoagent` 安装与管理，建议版本 `agent-v1.4.8`；本仓库安装器只部署采集端，并打印可直接执行的官方安装命令。
 
-运行时只依赖 Python 标准库。当前安装脚本固定官方 Agent `agent-v1.4.8`，接口核对基于 Master `v1.4.3`；升级前核对上游兼容要求。Mac IPC 已针对 MonoProxy `1.3.0` 验证，不是官方稳定 API。
+运行时只依赖 Python 标准库。建议的官方 Agent 版本为 `agent-v1.4.8`，接口核对基于 Master `v1.4.3`；升级前核对上游兼容要求。Mac IPC 已针对 MonoProxy `1.3.0` 验证，不是官方稳定 API。
 
 ## 开始使用
 
-先准备可访问的 Master、独立 Agent backend 和已运行的代理客户端，然后按[统一部署运维指南](docs/operations.md)安装对应采集端。
+先准备可访问的 Master、独立 Agent backend 和已运行的代理客户端，然后按[统一部署运维指南](docs/operations.md)部署采集端。采集端安装完成后，按安装器输出的命令（或[上游 Agent 指南](https://github.com/foru17/neko-master/blob/main/docs/agent/install.md)）安装 Agent。
 
 Linux 提供 [agent.env.example](agent.env.example) 配置模板。Mac 安装器要求显式传入 Master URL，可通过受限权限文件传入管理 Bearer token，不包含任何默认私有服务器地址。
 
@@ -52,7 +52,7 @@ python3 -B -m unittest discover -s tests -v
 
 测试使用合成数据和临时 socket，不依赖真实账号、节点或 Master。私有配置、日志、数据库及本地调查记录不得提交。`.gitignore` 保留配置模板并忽略真实 `agent.env` / `*.env`。
 
-这是一项非官方互操作项目，与 MonoCloud、MonoProxy、Chute 或 Neko 上游没有隶属关系。上游 Agent 由安装脚本从官方发布下载，不包含在仓库中。
+这是一项非官方互操作项目，与 MonoCloud、MonoProxy、Chute 或 Neko 上游没有隶属关系。上游 Agent 由官方工具安装与管理，本仓库不自行下载、校验或存放其二进制。
 
 ## 版本
 

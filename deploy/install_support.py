@@ -1,32 +1,87 @@
-"""Shared first-install staging and private, resumable publication journal."""
+"""Shared private publication journal and official Agent delegation."""
 import fcntl
 import hashlib
-import io
 import json
 import os
 from pathlib import Path
 import plistlib
 import re
 import shlex
-import tarfile
+import subprocess
+import sys
 import tempfile
 import urllib.error
 import urllib.request
 
-VERSION = "agent-v1.4.8"
-BASE = "https://github.com/foru17/neko-master/releases/download/" + VERSION + "/"
-ASSET_PLATFORMS = {"linux": "linux_amd64", "mac": "darwin_arm64"}
+# The official Agent is installed by upstream tooling; this is only the version
+# we recommend and pass to its installer.
+PINNED_AGENT_VERSION = "agent-v1.4.8"
+AGENT_INSTALL_URL = "https://raw.githubusercontent.com/foru17/neko-master/main/apps/agent/install.sh"
 
 
-def agent_asset(kind):
-    if kind not in ASSET_PLATFORMS:
-        raise ValueError("unsupported_platform")
-    return "neko-agent_" + VERSION + "_" + ASSET_PLATFORMS[kind] + ".tar.gz"
+def agent_env(kind, values, home):
+    """Environment for the upstream Agent installer; tokens stay in the environment."""
+    home = Path(home)
+    return {"NEKO_SERVER": values["NEKO_SERVER"],
+            "NEKO_BACKEND_ID": values["NEKO_BACKEND_ID"],
+            "NEKO_BACKEND_TOKEN": values["NEKO_BACKEND_TOKEN"],
+            "NEKO_GATEWAY_TYPE": values["NEKO_GATEWAY_TYPE"],
+            "NEKO_GATEWAY_URL": values["NEKO_GATEWAY_URL"],
+            "NEKO_GATEWAY_TOKEN": values["NEKO_GATEWAY_TOKEN"],
+            "NEKO_INSTALL_DIR": str(home / ".local/bin"),
+            "NEKO_AGENT_CONFIG_DIR": str(home / ".config/neko-agent"),
+            "NEKO_AGENT_STATE_DIR": str(home / ".local/state/neko-agent"),
+            "NEKO_AGENT_VERSION": PINNED_AGENT_VERSION,
+            # Upstream systemd autostart needs root; macOS launchd stays per-user.
+            "NEKO_AUTO_START": "true" if kind == "mac" else "false"}
 
 
-def expected_agent_version():
-    prefix = "agent-v"
-    return VERSION[len(prefix):] if VERSION.startswith(prefix) else VERSION
+def agent_command(kind, home):
+    """Printable upstream install command that reads tokens from the private config."""
+    config = Path(home) / (".config/monocloud-neko-bridge-mac/agent.env" if kind == "mac"
+                           else ".config/monocloud-neko-bridge/agent.env")
+    autostart = "true" if kind == "mac" else "false"
+    return "\n".join([
+        "set -a",
+        ". " + shlex.quote(str(config)),
+        "set +a",
+        'export NEKO_AGENT_CONFIG_DIR="$HOME/.config/neko-agent"',
+        'export NEKO_AGENT_STATE_DIR="$HOME/.local/state/neko-agent"',
+        'tmp="$(mktemp)"',
+        "trap 'rm -f \"$tmp\"' EXIT",
+        "curl -fsSL " + AGENT_INSTALL_URL + ' -o "$tmp" && \\',
+        "env \\",
+        '  NEKO_SERVER="$NEKO_SERVER" NEKO_BACKEND_ID="$NEKO_BACKEND_ID" \\',
+        '  NEKO_BACKEND_TOKEN="$NEKO_BACKEND_TOKEN" NEKO_GATEWAY_TYPE="$NEKO_GATEWAY_TYPE" \\',
+        '  NEKO_GATEWAY_URL="$NEKO_GATEWAY_URL" NEKO_GATEWAY_TOKEN="$NEKO_GATEWAY_TOKEN" \\',
+        '  NEKO_INSTALL_DIR="$HOME/.local/bin" \\',
+        '  NEKO_AGENT_CONFIG_DIR="$HOME/.config/neko-agent" \\',
+        '  NEKO_AGENT_STATE_DIR="$HOME/.local/state/neko-agent" \\',
+        '  NEKO_AGENT_VERSION="' + PINNED_AGENT_VERSION + '" NEKO_AUTO_START="' + autostart + '" \\',
+        '  sh "$tmp"'])
+
+
+def fetch_agent_installer(url=AGENT_INSTALL_URL):
+    opener = urllib.request.build_opener()
+    with opener.open(url, timeout=45) as response:
+        data = response.read(1048577)
+    if len(data) > 1048576:
+        raise ValueError("agent_installer_too_large")
+    return data.decode()
+
+
+def install_agent(kind, values, home, fetch=None, run=None):
+    """Run the upstream installer with this installation's gateway settings."""
+    fetch, run = fetch or fetch_agent_installer, run or subprocess.run
+    script = fetch(AGENT_INSTALL_URL)
+    environment = dict(os.environ)
+    environment.update(agent_env(kind, values, home))
+    result = run(["sh"], input=script, env=environment, text=True, capture_output=True)
+    if result.returncode != 0:
+        if getattr(result, "stderr", ""):
+            sys.stderr.write(result.stderr)
+        raise ValueError("agent_install_failed")
+    return result
 
 
 def atomic_write(path, content, mode=0o600, exclusive=False):
@@ -80,35 +135,6 @@ def mac_plist(role, target, logs, python):
             "StandardOutPath": str(logs / (role + "-launch.log")),
             "StandardErrorPath": str(logs / (role + "-launch.log"))}
     return label, plistlib.dumps(data)
-
-
-def fetch_release(asset, proxy=None):
-    opener = (urllib.request.build_opener(urllib.request.ProxyHandler({"https": proxy}))
-              if proxy else urllib.request.build_opener())
-    def read(name, limit):
-        with opener.open(BASE + name, timeout=45) as response:
-            data = response.read(limit + 1)
-        if len(data) > limit:
-            raise ValueError("release_response_too_large")
-        return data
-    checksums = read("checksums.txt", 1048576).decode()
-    expected = None
-    for line in checksums.splitlines():
-        fields = line.split()
-        if len(fields) == 2 and fields[1].lstrip("*") == asset:
-            expected = fields[0]
-    if expected is None or not re.fullmatch(r"[0-9a-fA-F]{64}", expected):
-        raise ValueError("release_checksum_entry_missing_or_invalid")
-    archive = read(asset, 64 * 1024 * 1024)
-    digest = hashlib.sha256(archive).hexdigest()
-    if digest != expected.lower():
-        raise ValueError("release_checksum_mismatch")
-    with tarfile.open(fileobj=io.BytesIO(archive), mode="r:gz") as tar:
-        members = [member for member in tar if Path(member.name).name == "neko-agent" and member.isfile()]
-        if len(members) != 1 or members[0].size > 64 * 1024 * 1024:
-            raise ValueError("unexpected_release_archive")
-        binary = tar.extractfile(members[0]).read()
-    return binary, digest
 
 
 class InstallState:
