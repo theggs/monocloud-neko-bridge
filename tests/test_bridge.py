@@ -207,6 +207,18 @@ class BridgeTests(unittest.TestCase):
         finally:
             server.server_close()
 
+    def test_listen_bind_skips_reverse_dns_lookup(self):
+        # HTTPServer would call socket.getfqdn() here; macOS can treat that lookup as
+        # local network access and show a permission prompt, so it must not happen.
+        with patch.object(self.module.socket, "getfqdn", side_effect=AssertionError("reverse DNS lookup")), \
+             patch.object(self.module.socket, "gethostbyaddr", side_effect=AssertionError("reverse DNS lookup")):
+            server = self.module.make_server(self.path, "test-token", port=0)
+        try:
+            self.assertEqual(server.server_name, "127.0.0.1")
+            self.assertEqual(server.server_port, server.server_address[1])
+        finally:
+            server.server_close()
+
     def test_auxiliary_nested_values_are_rejected_before_encoding(self):
         for path, payload in (("/rules", {"rules": [{"type": []}]}),
                               ("/proxies", {"proxies": {"DIRECT": {"now": {}}}}),

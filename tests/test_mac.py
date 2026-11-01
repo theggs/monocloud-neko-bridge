@@ -345,6 +345,17 @@ class MacSocketTests(unittest.TestCase):
         finally:
             server.shutdown();server.server_close();thread.join()
 
+    def test_mac_gateway_bind_skips_reverse_dns_lookup(self):
+        from unittest.mock import patch
+        with patch.object(self.m.socket,"getfqdn",side_effect=AssertionError("reverse DNS lookup")), \
+             patch.object(self.m.socket,"gethostbyaddr",side_effect=AssertionError("reverse DNS lookup")):
+            server=self.m.make_server(self.m.FlowCache(),"test-token",port=0)
+        try:
+            self.assertEqual(server.server_name,"127.0.0.1")
+            self.assertEqual(server.server_port,server.server_address[1])
+        finally:
+            server.server_close()
+
     def test_mac_http_requires_auth_and_rejects_writes(self):
         import http.client,threading
         cache=self.m.FlowCache();cache.begin_session(1700000000);cache.snapshot([self.row()],False)

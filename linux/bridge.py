@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import socket
+import socketserver
 import threading
 import time
 
@@ -84,6 +85,16 @@ class BridgeServer(ThreadingHTTPServer):
     def __init__(self, *args, max_clients=8, **kwargs):
         self.request_queue_size = max(self.request_queue_size, max_clients)
         super().__init__(*args, **kwargs)
+
+    def server_bind(self):
+        # HTTPServer.server_bind() resolves the bound address with socket.getfqdn(),
+        # which performs a reverse DNS lookup. macOS can attribute that lookup to
+        # local network access and prompt for permission, so bind through TCPServer
+        # and use the literal loopback address instead of a resolved hostname.
+        socketserver.TCPServer.server_bind(self)
+        host, port = self.server_address[:2]
+        self.server_name = host
+        self.server_port = port
 
     def get_request(self):
         client, address = super().get_request()
