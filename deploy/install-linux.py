@@ -6,9 +6,9 @@ from pathlib import Path
 import subprocess
 import tempfile
 
-from install_support import InstallState, VERSION, fetch_release, read_private_env, safe_error_code
+from install_support import InstallState, VERSION, agent_asset, expected_agent_version, fetch_release, read_private_env, safe_error_code
 
-ASSET = "neko-agent_agent-v1.4.8_linux_amd64.tar.gz"
+ASSET = agent_asset("linux")
 
 
 def install(home=None, source=None, fetch=None, run=None, repair=False):
@@ -42,7 +42,7 @@ def install(home=None, source=None, fetch=None, run=None, repair=False):
             executable = staging / "neko-agent"
             executable.write_bytes(binary); executable.chmod(0o700)
             result = run([str(executable), "--version"], check=True, capture_output=True, text=True, timeout=30)
-            if result.stdout.strip() not in ("1.4.8", VERSION):
+            if result.stdout.strip() not in (expected_agent_version(), VERSION):
                 raise ValueError("unexpected_agent_version")
             staged_units = []
             for path, content in unit_files.items():

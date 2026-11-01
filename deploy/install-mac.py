@@ -7,7 +7,6 @@ import json
 import os
 from pathlib import Path
 import platform
-import plistlib
 import secrets
 import shutil
 import subprocess
@@ -15,10 +14,10 @@ import tempfile
 import urllib.request
 from urllib.parse import urlsplit
 
-from install_support import InstallState, VERSION, encode_env, fetch_release, safe_error_code
+from install_support import (InstallState, VERSION, agent_asset, encode_env, expected_agent_version,
+                             fetch_release, mac_plist, safe_error_code)
 
-BASE = "https://github.com/foru17/neko-master/releases/download/agent-v1.4.8/"
-ASSET = "neko-agent_agent-v1.4.8_darwin_arm64.tar.gz"
+ASSET = agent_asset("mac")
 class NoManagementRedirects(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, request, fp, code, message, headers, newurl):
         # Do not forward management credentials, even to another path/origin.
@@ -83,13 +82,8 @@ def install(args, home=None, source=None, api=None, fetch=None, run=None):
     files[target / "bridge.py"] = (source / "linux/bridge.py").read_bytes()
     plists = {}
     for role in ("bridge", "agent"):
-        label = "io.monocloud-neko." + role
-        data = {"Label": label, "ProgramArguments": [str(python), "-B", str(target / "launcher.py"), role],
-                "RunAtLoad": True, "KeepAlive": True, "ThrottleInterval": 10, "ExitTimeOut": 30,
-                "ProcessType": "Background", "EnvironmentVariables": {"PYTHONDONTWRITEBYTECODE": "1"},
-                "StandardOutPath": str(logs / (role + "-launch.log")),
-                "StandardErrorPath": str(logs / (role + "-launch.log"))}
-        plists[launch / (label + ".plist")] = plistlib.dumps(data)
+        label, content = mac_plist(role, target, logs, python)
+        plists[launch / (label + ".plist")] = content
     paths = list(files) + list(plists) + [target / "neko-agent", target / "release.txt", config]
     identity = {"master": master, "backend_name": name, "python": str(python)}
     with InstallState(folder, "mac", args.repair) as state:
@@ -113,7 +107,7 @@ def install(args, home=None, source=None, api=None, fetch=None, run=None):
             executable = staging / "neko-agent"
             executable.write_bytes(binary); executable.chmod(0o700)
             result = run([str(executable), "--version"], check=True, capture_output=True, text=True, timeout=30)
-            if result.stdout.strip() not in ("1.4.8", VERSION):
+            if result.stdout.strip() not in (expected_agent_version(), VERSION):
                 raise ValueError("unexpected_agent_version")
             for path, content in plists.items():
                 candidate = staging / path.name; candidate.write_bytes(content)

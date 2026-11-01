@@ -22,7 +22,7 @@ class InstallSupportTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as t:
             folder=Path(t)/"private"
             with install_support.InstallState(folder,"test"):
-                with self.assertRaises(BlockingIOError):
+                with self.assertRaisesRegex(ValueError,"installation_locked"):
                     with install_support.InstallState(folder,"test"):pass
 
     def test_error_codes_never_include_private_or_remote_text(self):

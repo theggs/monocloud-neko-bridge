@@ -5,6 +5,7 @@ import io
 import json
 import os
 from pathlib import Path
+import plistlib
 import re
 import shlex
 import tarfile
@@ -14,6 +15,18 @@ import urllib.request
 
 VERSION = "agent-v1.4.8"
 BASE = "https://github.com/foru17/neko-master/releases/download/" + VERSION + "/"
+ASSET_PLATFORMS = {"linux": "linux_amd64", "mac": "darwin_arm64"}
+
+
+def agent_asset(kind):
+    if kind not in ASSET_PLATFORMS:
+        raise ValueError("unsupported_platform")
+    return "neko-agent_" + VERSION + "_" + ASSET_PLATFORMS[kind] + ".tar.gz"
+
+
+def expected_agent_version():
+    prefix = "agent-v"
+    return VERSION[len(prefix):] if VERSION.startswith(prefix) else VERSION
 
 
 def atomic_write(path, content, mode=0o600, exclusive=False):
@@ -58,6 +71,17 @@ def encode_env(values):
     return "".join(key + "=" + shlex.quote(str(value)) + "\n" for key, value in values.items()).encode()
 
 
+def mac_plist(role, target, logs, python):
+    """Build one LaunchAgent job exactly as the mac installer publishes it."""
+    label = "io.monocloud-neko." + role
+    data = {"Label": label, "ProgramArguments": [str(python), "-B", str(target / "launcher.py"), role],
+            "RunAtLoad": True, "KeepAlive": True, "ThrottleInterval": 10, "ExitTimeOut": 30,
+            "ProcessType": "Background", "EnvironmentVariables": {"PYTHONDONTWRITEBYTECODE": "1"},
+            "StandardOutPath": str(logs / (role + "-launch.log")),
+            "StandardErrorPath": str(logs / (role + "-launch.log"))}
+    return label, plistlib.dumps(data)
+
+
 def fetch_release(asset, proxy=None):
     opener = (urllib.request.build_opener(urllib.request.ProxyHandler({"https": proxy}))
               if proxy else urllib.request.build_opener())
@@ -89,8 +113,8 @@ def fetch_release(asset, proxy=None):
 
 class InstallState:
     """An exclusive per-user journal; only journal-owned bytes may be resumed."""
-    def __init__(self, folder, kind, repair=False):
-        self.folder, self.kind, self.repair = Path(folder), kind, repair
+    def __init__(self, folder, kind, repair=False, upgrade=False):
+        self.folder, self.kind, self.repair, self.upgrade = Path(folder), kind, repair, upgrade
         self.path = self.folder / "install-state.json"
         self.data = None
         self.lock = None
@@ -103,15 +127,22 @@ class InstallState:
         descriptor = os.open(self.folder / "install.lock", os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
         self.lock = os.fdopen(descriptor, "a+")
         try:
-            fcntl.flock(self.lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            try:
+                fcntl.flock(self.lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                raise ValueError("installation_locked") from None
             if self.path.exists():
                 if self.path.is_symlink() or self.path.stat().st_mode & 0o077 or self.path.stat().st_size > 1048576:
                     raise ValueError("insecure_installation_journal")
                 self.data = json.loads(self.path.read_text())
                 if self.data.get("schema") != 1 or self.data.get("kind") != self.kind:
                     raise ValueError("incompatible_installation_journal")
-                if not self.repair:
+                if self.upgrade and self.data.get("phase") != "complete":
+                    raise ValueError("incomplete_installation_journal")
+                if not self.repair and not self.upgrade:
                     raise ValueError("installation_exists_use_repair_to_resume")
+            elif self.upgrade:
+                raise ValueError("installation_not_found")
             return self
         except BaseException:
             self.lock.close()
@@ -166,6 +197,28 @@ class InstallState:
 
     def finish(self):
         self.data["phase"] = "complete"
+        self.save()
+
+    def verify(self, ignore=()):
+        """Confirm every recorded artifact still holds the bytes this journal published."""
+        if self.data is None:
+            raise ValueError("installation_not_found")
+        for name, digest in self.data["artifacts"].items():
+            if name in ignore:
+                continue
+            path = Path(name)
+            if path.is_symlink() or not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != digest:
+                raise ValueError("existing_installation_file_conflict")
+
+    def replace(self, path, content, mode=0o644):
+        """Atomically replace a journal-owned artifact and record its new digest."""
+        path = Path(path)
+        if str(path) not in self.data["artifacts"]:
+            raise ValueError("unrecorded_installation_artifact")
+        if path.is_symlink() or not path.is_file():
+            raise ValueError("missing_installation_artifact")
+        atomic_write(path, content, mode)
+        self.data["artifacts"][str(path)] = hashlib.sha256(content).hexdigest()
         self.save()
 
 
