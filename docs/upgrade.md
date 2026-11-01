@@ -1,186 +1,77 @@
 # 升级指南
 
-本文说明如何升级**已安装的采集端**：Linux bridge 与 macOS adapter。Master 的升级、备份与数据库回滚按 [Neko Master 上游](https://github.com/foru17/neko-master)要求处理，不在本文范围。
+采集端（Linux bridge / macOS adapter）升级只需要一条命令。配置、backend 和令牌都不需要改动。
 
-初次安装请先阅读[部署与运维指南](operations.md)。
+## 前置条件
 
-## 1. 版本与升级来源
+- 已按[部署与运维指南](operations.md)安装过（私有目录中存在 `install-state.json`）。
+- Python 3.9 或以上，与当前安装使用的解释器一致（macOS 以安装记录中的路径为准）。
+- 目标版本的代码已检出到本仓库。
 
-- 版本以 Git 标签 `vX.Y.Z` 标识，源码本身即发布物，本仓库不发布二进制归档。
-- 每个版本的变更与已知限制记录在 [CHANGELOG](../CHANGELOG.md)；升级前先阅读目标版本条目。
-- 兼容基线：Python 3.9 或以上；Linux amd64 使用 `/usr/bin/python3`，macOS arm64 使用安装时指定的持久 Python。
-- 安装器当前固定官方 Agent `agent-v1.4.8`，接口核对基于 Master `v1.4.3`；Mac IPC 针对 MonoProxy `1.3.0` 验证，不是上游稳定 API。
-- 升级来源应是本仓库对应标签的代码。不要使用来源不明的压缩包或补丁。
-
-## 2. 升级前的准备
-
-1. 确认目标版本要求：Python 版本、官方 Agent 版本、配置项和协议是否变化（见 CHANGELOG 与[已知限制](../README.md#已知限制)）。
-2. 选择低流量时段。bridge/adapter 与 Agent 的缓存、上报队列只在内存中，重启会丢失尚未上报的数据。
-3. 备份专用安装目录、私有配置、service/plist 和安装记录。备份目录必须为 `0700`，因为其中包含令牌。
-
-Linux：
-
-```sh
-stamp=$(date +%Y%m%d-%H%M%S)
-bak="$HOME/.local/state/monocloud-neko-upgrade/$stamp"
-install -d -m 700 "$bak"
-cp -a "$HOME/.local/lib/monocloud-neko-bridge" "$bak/linux-lib"
-cp -a "$HOME/.config/monocloud-neko-bridge" "$bak/linux-config"
-cp -a "$HOME/.config/systemd/user/monocloud-neko-bridge.service" \
-      "$HOME/.config/systemd/user/monocloud-neko-agent.service" "$bak/"
-```
-
-macOS：
-
-```sh
-stamp=$(date +%Y%m%d-%H%M%S)
-bak="$HOME/.local/state/monocloud-neko-upgrade/$stamp"
-install -d -m 700 "$bak"
-cp -a "$HOME/.local/lib/monocloud-neko-bridge-mac" "$bak/mac-lib"
-cp -a "$HOME/.config/monocloud-neko-bridge-mac" "$bak/mac-config"
-cp -a "$HOME/Library/LaunchAgents/io.monocloud-neko.bridge.plist" \
-      "$HOME/Library/LaunchAgents/io.monocloud-neko.agent.plist" "$bak/"
-```
-
-备份含 `agent.env` 与 `install-state.json`，两者都含令牌：不要提交、上传或粘贴到 issue。
-
-## 3. 获取目标版本
+## 升级
 
 ```sh
 git -C /path/to/monocloud-neko-bridge fetch --tags
 git -C /path/to/monocloud-neko-bridge checkout v0.0.2   # 替换为目标版本
+cd /path/to/monocloud-neko-bridge
+python3 -B deploy/upgrade.py --dry-run   # 预览会修改哪些文件、重启哪些服务
+python3 -B deploy/upgrade.py
 ```
 
-确认工作区干净、标签与发布页一致。若目标版本有对应 GitHub Release，以该标签为准。
+脚本按顺序完成：
 
-## 4. 停服务
+1. 检查 `agent.env` 是否具备新版本所需的必填项；缺少时列出键名，并在改动任何文件前退出。
+2. 核对已安装文件与安装记录一致，避免覆盖被手工改动的内容。
+3. 备份将要修改的文件与 `install-state.json` 到 `~/.local/state/monocloud-neko-upgrade/<时间>/`。
+4. 只替换内容确实变化的程序文件；Linux 的 service、macOS 的 plist 一并处理。
+5. 目标版本固定了新的官方 Agent 时，按上游 `checksums.txt` 下载、校验版本后替换。
+6. 只在服务原本运行时停止并重启它们，且先起 bridge、后起 Agent。
+7. 检查本机 `/health`；失败时自动恢复备份并重启旧版本。
 
-先停 Agent，再停采集端，避免停服期间产生无意义的上报失败。
+需要限制下载出口时加 `--download-proxy`，它只用于下载新 Agent。
 
-Linux：
+## 不需要做的事
 
-```sh
-systemctl --user stop monocloud-neko-agent.service monocloud-neko-bridge.service
-```
+- 不需要编辑 `agent.env`、令牌或 Master backend；脚本不会改写配置，也不会重新创建 backend。
+- 不需要手工对比配置文件：必填项检查是自动的。可选项与行为变化见 [CHANGELOG](../CHANGELOG.md)。
+- 不需要手工替换 `neko-agent` 或逐个复制文件。
 
-macOS：
+## 失败处理
 
-```sh
-launchctl bootout "gui/$(id -u)/io.monocloud-neko.agent"
-launchctl bootout "gui/$(id -u)/io.monocloud-neko.bridge"
-```
+脚本失败时会自动回滚并打印备份路径；备份不会被删除，确认新版本可用后可自行清理。
 
-## 5. 替换专用文件
+| 提示 | 处理 |
+|---|---|
+| `private_config_not_ready` | 按列出的键补齐 `agent.env` 后重跑 |
+| `insecure_or_missing_private_config` | `agent.env` 缺失，或权限不是 `0600` |
+| `existing_installation_file_conflict` | 安装目录被手工改过；恢复该文件后重跑 |
+| `installation_locked` | 另一个安装/升级进程正在运行；等待后重跑 |
+| `installation_not_found` | 安装记录缺失；按运维指南重新安装 |
+| `incomplete_installation_journal` | 上次安装未完成；先用对应安装器 `--repair` 恢复，再重新升级 |
+| `gateway_token_rejected` | 本机网关令牌与配置不一致；确认 `NEKO_GATEWAY_TOKEN` 后重跑 |
+| `health_check_timeout` / `health_check_failed` | 已自动回滚；检查客户端 socket 与日志后重跑 |
+| `persistent_python_is_not_executable` | macOS 记录的 Python 已被移除；按运维指南重新安装 |
+| `agent_binary_missing` / `missing_recorded_backend` | 安装目录或安装记录不完整；按运维指南重新安装 |
+| `unsupported_platform` | 只支持 Linux amd64 与 macOS arm64 |
 
-只替换本项目的专用安装目录。不要修改代理客户端、其他 Agent 或其他 backend，也不要手工替换 `neko-agent`（见第 9 节）。下面的文件清单对应当前版本；清单以目标版本安装器的发布列表为准。
+## 需要手工处理的情况
 
-Linux：替换程序文件和 `service` 文件（第 2 节已备份，覆盖是安全的；内容未变化时覆盖也没有影响）。
+- **macOS 需要重建 plist 或更换 Python 路径**：脚本会报错而不是猜测；按[运维指南](operations.md#4-macos-安装与服务)重新安装并迁移配置。
+- **目标版本要求新 Agent，但下载受限**：使用 `--download-proxy`；仍不可行时按运维指南重新安装。
+- **旧安装没有 `install-state.json`**（不是当前安装器创建的）：脚本不会接管，按运维指南重新安装并迁移配置。
 
-```sh
-install -m 0644 linux/bridge.py linux/run_agent.py \
-  "$HOME/.local/lib/monocloud-neko-bridge/"
-install -m 0644 deploy/monocloud-neko-bridge.service \
-  deploy/monocloud-neko-agent.service "$HOME/.config/systemd/user/"
-```
+## 关于安装器与回滚
 
-macOS：安装器会把 `linux/bridge.py` 复制为 mac 端的 `bridge.py`，升级时同样需要复制。
+- 安装器只用于新安装和中断修复，不用于升级。手动替换文件后，`--repair` 会因校验值不匹配而拒绝继续，这是保护行为，不影响已发布程序的运行。
+- 自动回滚失败或需要手工恢复时，备份目录中的 `index.json` 记录了每个文件的原路径、备份文件名和权限，按记录覆盖回去再重启服务即可。
 
-```sh
-install -m 0644 mac/adapter.py mac/protocol.py mac/launcher.py \
-  "$HOME/.local/lib/monocloud-neko-bridge-mac/"
-install -m 0644 linux/bridge.py \
-  "$HOME/.local/lib/monocloud-neko-bridge-mac/bridge.py"
-```
+## 升级期间的数据
 
-macOS 的 plist 由安装器按绝对路径与 Python 路径生成，仓库中不含模板。目标版本如果没有要求修改 plist，就保持原文件；如果要求修改，按当前 plist 的字段手工调整，或按[运维指南](operations.md#4-macos-安装与服务)重新安装到新目录并迁移配置。更换 Python 路径同样属于这种情况。
+- 重启会丢弃内存中的缓存与未上报队列，Linux 短连接也可能漏采；请在低流量时段升级。
+- Master 的历史数据、backend 和令牌不受采集端升级影响，也不需要重建 backend。
+- `release.txt` 只记录 Agent 版本与校验值；本次升级的仓库版本记录在 `install-state.json` 的 `bridge_version` 中。
 
-## 6. 重载并启动
+## 维护者：提升固定 Agent 版本
 
-Linux：先起 bridge，确认监听后再起 Agent。
-
-```sh
-systemctl --user daemon-reload
-systemctl --user start monocloud-neko-bridge.service
-ss -lnt | rg ':19092 '
-systemctl --user start monocloud-neko-agent.service
-```
-
-macOS：
-
-```sh
-launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/io.monocloud-neko.bridge.plist"
-launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/io.monocloud-neko.agent.plist"
-```
-
-macOS 的 launcher 会轮询本机 `/health`（最多约 30 秒）后才拉起 Agent，因此即使两条命令连续执行，也有启动顺序保证。刚 `bootout` 后立即 `bootstrap` 可能报错误 5，先确认状态并等待后重试，不要改用 root 加载。
-
-## 7. 验证
-
-```sh
-systemctl --user is-active monocloud-neko-bridge.service monocloud-neko-agent.service
-```
-
-macOS 用 `launchctl print "gui/$(id -u)/io.monocloud-neko.bridge"` 与 `...agent` 查看状态，用 `lsof -nP -iTCP:19093 -sTCP:LISTEN` 确认监听。
-
-本机接口检查（Linux 为 `19092`，macOS 为 `19093`）。令牌从私有配置读取，不打印到终端：
-
-```sh
-set -a
-. "$HOME/.config/monocloud-neko-bridge/agent.env"   # macOS 改为 monocloud-neko-bridge-mac，URL 端口改为 19093
-set +a
-curl -sS -H "Authorization: Bearer $NEKO_GATEWAY_TOKEN" http://127.0.0.1:19092/health
-```
-
-令牌会像 Agent 一样通过命令行参数传给 `curl`，具备本机进程查看权限的账户可能读到；不要在其他人的终端或会话共享场景执行。
-
-macOS 升级后还需要在 Master 管理页面确认目标 backend 有新数据。注意心跳正常不等于采集成功；检查采集接口状态和日志中的错误码。`401` 表示本机网关令牌错误，不能用管理令牌替代。
-
-## 8. 回滚
-
-服务异常时按备份恢复，再按第 6 节重启。以下命令沿用第 2 节同一 shell 会话中的 `$bak`，先用 `test -d` 确认备份存在。
-
-Linux：
-
-```sh
-test -d "$bak/linux-lib" || { echo "backup missing"; exit 1; }
-systemctl --user stop monocloud-neko-agent.service monocloud-neko-bridge.service
-rm -rf "$HOME/.local/lib/monocloud-neko-bridge"
-cp -a "$bak/linux-lib" "$HOME/.local/lib/monocloud-neko-bridge"
-rm -rf "$HOME/.config/monocloud-neko-bridge"
-cp -a "$bak/linux-config" "$HOME/.config/monocloud-neko-bridge"
-cp -a "$bak"/monocloud-neko-*.service "$HOME/.config/systemd/user/"
-systemctl --user daemon-reload
-systemctl --user start monocloud-neko-bridge.service
-systemctl --user start monocloud-neko-agent.service
-```
-
-先删除再整目录恢复，可以避免新版本新增的文件残留。macOS：
-
-```sh
-test -d "$bak/mac-lib" || { echo "backup missing"; exit 1; }
-launchctl bootout "gui/$(id -u)/io.monocloud-neko.agent"
-launchctl bootout "gui/$(id -u)/io.monocloud-neko.bridge"
-rm -rf "$HOME/.local/lib/monocloud-neko-bridge-mac"
-cp -a "$bak/mac-lib" "$HOME/.local/lib/monocloud-neko-bridge-mac"
-rm -rf "$HOME/.config/monocloud-neko-bridge-mac"
-cp -a "$bak/mac-config" "$HOME/.config/monocloud-neko-bridge-mac"
-cp -a "$bak"/io.monocloud-neko.*.plist "$HOME/Library/LaunchAgents/"
-launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/io.monocloud-neko.bridge.plist"
-launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/io.monocloud-neko.agent.plist"
-```
-
-回滚不要删除 Master 上的 backend 或历史数据；这些与采集端版本无关。
-
-## 9. 关于安装器、安装记录与 Agent
-
-- **安装器不用于升级。** `deploy/install-linux.py` 与 `deploy/install-mac.py` 只负责新安装和中断恢复，遇到已存在且不匹配的文件会拒绝覆盖。
-- **`--repair` 会拒绝已升级的安装。** 手动替换文件后，`install-state.json` 记录的文件校验值不再匹配，`--repair` 会以 `existing_installation_file_conflict` 停止；如果只更新仓库、安装目录仍是旧文件，而新版本改动了这些已发布文件，则会以 `installation_payload_changed` 停止。这是保护行为，不影响已发布程序运行。
-- `install-state.json` 含 backend 与网关令牌，权限必须保持 `0600`，并与配置一起备份。
-- **官方 Agent 的版本固定在安装器中。** 升级 Agent 需要修改 `deploy/install_support.py` 的 `VERSION`、两个安装器中的 `ASSET`，以及 `install-linux.py` / `install-mac.py` 中 `--version` 校验的硬编码版本字面量，再核对上游发布包的版本与 SHA256，并重新验证安装流程；不能只改文档版本号，也不建议手工替换 `neko-agent`（会绕过校验，并使 `release.txt` 与实际不符）。
-- 如果目标版本固定了新的 Agent，现有安装无法只替换程序文件来升级 Agent，需要按[运维指南](operations.md)重新安装并迁移配置。macOS 会拒绝接管归属不同的同名 backend，可能需要新的 backend 名称；Master 上旧 backend 的历史数据保留与否由使用方决定。
-
-## 10. 升级期间的数据
-
-- 重启会丢弃内存中的缓存与未上报队列，Linux 短连接也可能漏采；对完整字节审计有要求的场景，应在维护窗口升级并记录缺口。
-- Master 的历史数据、backend 和令牌不受采集端升级影响；升级也不需要重新创建 backend。
-- 升级完成后检查 `release.txt`（Agent 版本与校验值）和当前 Git 标签，确认运行的是预期版本。`release.txt` 不记录 bridge/adapter 版本，建议在私有记录中同时记下本次升级的标签与时间。
+- 只需修改 `deploy/install_support.py` 的 `VERSION`：发行包名与期望的 `--version` 由 `agent_asset()` / `expected_agent_version()` 统一推导，两个安装器和升级脚本共用，不再需要分别修改硬编码字面量。
+- 仍要核对上游 `checksums.txt`、架构与发布说明，并运行 `python3 -B -m unittest discover -s tests -v`。
