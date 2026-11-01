@@ -1,0 +1,26 @@
+[Unit]
+Description=MonoCloud Neko bridge
+After=network-online.target
+
+[Service]
+Type=notify
+TimeoutStartSec=10
+EnvironmentFile=%h/.config/monocloud-neko-bridge/agent.env
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/usr/bin/python3 -B %h/.local/lib/monocloud-neko-bridge/bridge.py
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=10
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+StandardOutput=journal
+StandardError=journal
+LogRateLimitIntervalSec=60
+LogRateLimitBurst=20
+
+[Install]
+WantedBy=default.target
