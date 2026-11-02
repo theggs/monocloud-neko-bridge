@@ -62,7 +62,7 @@ python3 -B -m unittest discover -s tests -v
 
 ## 版本
 
-当前版本 `0.0.1`，变更见 [CHANGELOG.md](CHANGELOG.md)。
+当前版本 `0.0.2`，变更见 [CHANGELOG.md](CHANGELOG.md)。
 
 ## 许可证
 

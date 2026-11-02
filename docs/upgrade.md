@@ -59,11 +59,19 @@ python3 -B deploy/upgrade.py
 - **macOS 需要重建 plist 或更换 Python 路径**：脚本会报错而不是猜测；按[运维指南](operations.md#4-macos-安装与服务)重新安装并迁移配置。
 - **旧安装没有 `install-state.json`**：默认拒绝升级以保证安全。确认升级的是本项目的专用目录后，可按上文加 `--adopt`（不校验已装文件），否则按运维指南重新安装。
 
-## 从旧版本迁移：把 Agent 交还官方
+## 从 0.0.1 升级到 0.0.2
 
-早期版本会同时安装并管理 `neko-agent`、Agent 的 systemd unit / LaunchAgent、`run_agent.py` 和 `release.txt`。迁移顺序建议如下。
+0.0.1 及更早版本会同时安装并管理 `neko-agent`、Agent 的 systemd unit / LaunchAgent、`run_agent.py` 和 `release.txt`。本节把 Agent 交还官方，并把采集端升级到 0.0.2。
 
-1. 先升级采集端（`python3 -B deploy/upgrade.py`）。升级脚本会忽略旧记录中的 Agent 文件，不会删除它们。
+1. 切换到 0.0.2，并在仓库根目录升级采集端：
+
+   ```sh
+   git fetch --tags
+   git checkout v0.0.2
+   python3 -B deploy/upgrade.py
+   ```
+
+   0.0.1 安装器创建的安装带 `install-state.json`，通常可以直接升级；如果提示找不到安装记录，按上文加 `--adopt` 重跑。升级脚本不会删除旧 Agent 文件。
 2. 停用并移除旧 Agent 作业：
 
    Linux：

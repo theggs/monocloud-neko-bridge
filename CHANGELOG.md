@@ -2,27 +2,25 @@
 
 本文件记录本项目自身的发布历史，与上游 neko-agent 的版本号无关。
 
-## 未发布
+## 0.0.2 - 2026-11-02
 
-### 变更
+### 升级提示
 
-- Agent 的安装与升级交还官方 `install.sh` / `nekoagent`：安装器只部署采集端并输出可直接执行的官方命令（可选 `--install-agent`），不再下载或保存 `neko-agent`。
-- 删除 `linux/run_agent.py`、Agent 的 systemd unit 与 LaunchAgent、Agent 下载校验逻辑及 `release.txt`；升级脚本只处理 bridge/adapter。
-- 旧安装的迁移步骤见[升级指南](docs/upgrade.md#从旧版本迁移把-agent-交还官方)。
+- **本项目的安装器不再安装或管理 Agent。** Agent 请按官方文档安装；从 0.0.1 升级时，按[升级指南](docs/upgrade.md#从-001-升级到-002)迁移并删除旧的 Agent 服务和文件。
+- 旧版本安装：如果升级时提示找不到安装记录，加上 `--adopt` 重跑。
 
 ### 新增
 
-- 一键升级：`deploy/upgrade.py` 自动检查配置必填项、备份、只替换变化的文件、重启采集端并检查 `/health`，失败时自动回滚。无需手工比对配置或逐文件操作；没有安装记录的旧安装可用 `--adopt`。
+- 切换到 0.0.2 版本后，运行 `python3 -B deploy/upgrade.py` 升级采集端；升级前自动备份，失败时自动回滚。详见[升级指南](docs/upgrade.md)。
+- 安装采集端时加 `--install-agent`，会一并安装官方 Agent；不加则只显示官方安装步骤。
 
-### 文档
+### 变更
 
-- 新增[升级指南](docs/upgrade.md)：一条命令的升级流程、失败处理、Agent 迁移与需要手工处理的例外情况。
+- 本项目只负责采集端；Neko Master 和 neko-agent 都按官方文档安装和升级。顺序是：先安装 Neko Master，再安装采集端，最后安装 neko-agent。
 
 ### 修复
 
-- macOS 采集端启动时不再做反向 DNS 解析（Linux 入口 19092 同样生效）：`BridgeServer` 重写 `server_bind`，跳过 `HTTPServer` 对 `socket.getfqdn()` 的调用，改用绑定的回环地址作为 `server_name`；该查询是仅监听 `127.0.0.1` 时仍可能触发 macOS "本地网络"授权弹窗的一个来源（#1）。
-- 实际弹窗行为仍需真机验证。Master 位于局域网时，Agent 连接 Master 本身仍可能触发该授权，不属于本修复范围。
-- 已安装的 macOS 采集端不会自动获得此修复：安装器不升级既有安装，需按[部署运维指南](docs/operations.md#7-备份升级与卸载)手动升级。手动替换后的文件与私有安装记录不再匹配，`--repair` 会拒绝继续，但不影响已发布程序的运行。
+- macOS 上启动采集端时不再弹出“本地网络”授权提示（#1）；已在 macOS 与 Linux 验证。
 
 ## 0.0.1 - 2026-11-01
 
